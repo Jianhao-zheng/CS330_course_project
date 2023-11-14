@@ -50,3 +50,31 @@ class ReplayBuffer:
         ind = np.random.randint(0, self.size, size=batch_size)
         return tuple(torch.FloatTensor(self.buffer[k][ind]).to(self.device)
             for k in self.key_order)
+
+
+    def save(self, path):
+        np.savez(path,
+                 key_order=self.key_order,
+                 max_size=self.max_size,
+                 size=self.size,
+                 ptr=self.ptr,
+                 **self.buffer)
+
+    @staticmethod
+    def load(path):
+        d = np.load(path)
+        dummy = ReplayBuffer(1, 1, 1,
+                             track_reward=('reward' in d['key_order']),
+                             track_terminal=('terminal' in d['key_order']))
+        dummy.key_order = list(d['key_order'])
+        dummy.max_size = int(d['max_size'])
+        dummy.size = int(d['size'])
+        dummy.ptr = int(d['ptr'])
+        dummy.buffer['state'] = d['state']
+        dummy.buffer['action'] = d['action']
+        dummy.buffer['next_state'] = d['next_state']
+        if 'reward' in d['key_order']:
+            dummy.buffer['reward'] = d['reward']
+        if 'terminal' in d['key_order']:
+            dummy.buffer['terminal'] = d['terminal']
+        return dummy

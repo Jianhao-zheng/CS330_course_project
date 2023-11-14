@@ -93,8 +93,10 @@ if __name__ == '__main__':
         env=env,
         device=device,
         num_steps_per_epi=PATH_LENGTH,
-        num_train_cycles=10
+        num_train_cycles=150
     )
 
     print(out_buffer.size, out_buffer.ptr)
     print(out_buffer.sample(5))
+
+    out_buffer.save('./vanilla_rnd.npz')
