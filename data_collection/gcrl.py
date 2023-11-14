@@ -1,4 +1,5 @@
 import torch
+import metaworld
 
 from data_collection.replay import ReplayBuffer
 from data_collection.rnd import RNDModel
@@ -15,26 +16,33 @@ def run_gcrl_with_rnd(
     env,
     device,
     num_train_cycles=150,
+    warm_up_cycles=2, # must be >=1
     num_epi_per_cycle=10,
     num_steps_per_epi=500,
 ) -> ReplayBuffer:
     rnd_optimizer = torch.optim.AdamW(rnd.predictor.parameters(), lr=0.001)
 
     live_buffer = ReplayBuffer(state_dim, action_dim, track_reward=False, track_terminal=False)
-    out_data = ReplayBuffer(state_dim, action_dim, max_size=1e7)
+    out_data = ReplayBuffer(state_dim, action_dim, max_size=int(1e7))
+
     for c in range(num_train_cycles):
+        print(f'Train cycle {c}')
         step_ct = 0
         for e in range(num_epi_per_cycle):
             state, _ = env.reset()
-
-            goal_candidates = live_buffer.sample(num_epi_per_cycle*num_steps_per_epi)[2]
-            pred_out, target_out = rnd(goal_candidates) # batch this if needed
-            goal_idx = torch.argmax(torch.sum((pred_out - target_out)**2), dim=-1)
-            goal = goal_candidates[goal_idx]
+            
+            if c > warm_up_cycles:
+                goal_candidates = live_buffer.sample(num_epi_per_cycle*num_steps_per_epi)[2]
+                pred_out, target_out = rnd(goal_candidates) # batch this if needed
+                goal_idx = torch.argmax(torch.sum((pred_out - target_out)**2), dim=-1)
+                goal = goal_candidates[goal_idx]
+            else:
+                goal = torch.tensor(env.observation_space.sample(), dtype=torch.float32, device=device)
+            
             for t in range(num_steps_per_epi):
                 step_ct += 1
                 action = rl_alg.select_action(
-                    torch.cat((torch.tensor(state, device=device), goal), dim=0))
+                    torch.cat((torch.tensor(state, device=device, dtype=torch.float32), goal), dim=0))
                 next_state, reward, terminal, truncate, info = env.step(action)
                 live_buffer.add(state, action, next_state)
                 out_data.add(state, action, next_state, reward, terminal)
@@ -44,13 +52,14 @@ def run_gcrl_with_rnd(
 
             for t in range(num_steps_per_epi):
                 states, actions, next_states = live_buffer.sample(128) # batch size?
-                # TODO: unsure how to sample goals
-                goal_samples = states[torch.randint(high=len(states), size=(len(states),))[0]]
-                rewards = -torch.all(torch.isclose(states, goal_samples), dim=-1).float() # isclose or strict equality?
+                goal_samples = states[torch.randint(high=len(states), size=(len(states),)), :]
+                rewards = -(~(torch.all(torch.isclose(states, goal_samples), dim=-1))).float() # isclose or strict equality?
                 terminals = torch.logical_or(
                     torch.all(torch.isclose(states, goal_samples), dim=-1),
                     torch.all(torch.isclose(next_states, goal_samples), dim=-1)).float()
-                rl_alg.train_step((states, actions, next_states, rewards, terminals))
+                train_states = torch.cat((states, goal_samples), dim=-1)
+                train_next_states = torch.cat((states, goal_samples), dim=-1)
+                rl_alg.train_step((train_states, actions, train_next_states, rewards, terminals))
         
         cycle_state, _, cycle_next_state = live_buffer.sample_last_n(step_ct)
         for k in range(4):
@@ -61,10 +70,42 @@ def run_gcrl_with_rnd(
                 loss = torch.mean((pred_out - target_out)**2)
 
                 loss.backward()
+                rnd_optimizer.step()
                 rnd_optimizer.zero_grad()
 
     return out_data
 
 if __name__ == '__main__':
-    out_buffer = run_gcrl_with_rnd() # TODO: test functionality and modularize
+    PATH_LENGTH = 500
+    STATE_DIM = 39
+    ACTION_DIM = 4
 
+    ml1 = metaworld.ML1("pick-place-v2", seed=0)
+    env = ml1.train_classes["pick-place-v2"](render_mode="rgb_array")
+    env.set_task(ml1.train_tasks[0])
+    env.max_path_length = PATH_LENGTH
+    device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
+
+
+    out_buffer = run_gcrl_with_rnd(
+        state_dim=STATE_DIM,
+        action_dim=ACTION_DIM,
+        rl_alg=TD3(
+            state_dim=STATE_DIM*2,
+            action_dim=ACTION_DIM,
+            max_action=1,
+            device=device,
+        ),
+        rnd=RNDModel(
+            input_size=STATE_DIM,
+            output_size=512,
+        ).to(device),
+        env=env,
+        device=device,
+        num_train_cycles=10,
+        warm_up_cycles=2,
+        num_epi_per_cycle=2,
+        num_steps_per_epi=PATH_LENGTH
+    )
+    print(out_buffer.size, out_buffer.ptr)
+    print(out_buffer.sample(5))

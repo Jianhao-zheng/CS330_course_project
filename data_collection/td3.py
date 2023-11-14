@@ -53,7 +53,9 @@ class TD3:
 
         # Sample replay buffer 
         state, action, next_state, reward, done = train_batch
-
+        reward = reward[:, None]
+        done = done[:, None]
+        # print(state.shape, action.shape, next_state.shape, reward.shape, done.shape)
         with torch.no_grad():
             # Select action according to policy and add clipped noise
             noise = (
@@ -73,6 +75,7 @@ class TD3:
         current_Q1, current_Q2 = self.critic(state, action)
 
         # Compute critic loss
+        # print(current_Q1.shape, target_Q.shape)
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
 
         # Optimize the critic

@@ -48,6 +48,5 @@ class ReplayBuffer:
 
     def sample(self, batch_size):
         ind = np.random.randint(0, self.size, size=batch_size)
-
         return tuple(torch.FloatTensor(self.buffer[k][ind]).to(self.device)
             for k in self.key_order)
