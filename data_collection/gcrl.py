@@ -1,5 +1,9 @@
 import torch
 import metaworld
+from tqdm import tqdm
+import numpy as np
+
+from copy import deepcopy
 
 from data_collection.replay import ReplayBuffer
 from data_collection.rnd import RNDModel
@@ -22,31 +26,33 @@ def run_gcrl_with_rnd(
 ) -> ReplayBuffer:
     rnd_optimizer = torch.optim.AdamW(rnd.predictor.parameters(), lr=0.001)
 
-    live_buffer = ReplayBuffer(state_dim, action_dim, track_reward=False, track_terminal=False)
-    out_data = ReplayBuffer(state_dim, action_dim, max_size=int(1e7))
+    live_buffer = ReplayBuffer(state_dim, action_dim, track_reward=False, track_terminal=False, track_truncate=False)
+    out_data = ReplayBuffer(state_dim, action_dim, max_size=int(num_train_cycles*num_epi_per_cycle*num_steps_per_epi),
+        track_reward=True, track_terminal=True, track_truncate=True)
 
     for c in range(num_train_cycles):
         print(f'Train cycle {c}')
         step_ct = 0
-        for e in range(num_epi_per_cycle):
+        for e in tqdm(range(num_epi_per_cycle)):
             state, _ = env.reset()
             
-            if c > warm_up_cycles:
+            if c >= warm_up_cycles:
                 goal_candidates = live_buffer.sample(num_epi_per_cycle*num_steps_per_epi)[2]
                 pred_out, target_out = rnd(goal_candidates) # batch this if needed
                 goal_idx = torch.argmax(torch.sum((pred_out - target_out)**2), dim=-1)
-                goal = goal_candidates[goal_idx]
+                goal = goal_candidates[goal_idx].cpu().numpy()
             else:
-                goal = torch.tensor(env.observation_space.sample(), dtype=torch.float32, device=device)
+                goal = env.observation_space.sample()
             
             for t in range(num_steps_per_epi):
                 step_ct += 1
-                action = rl_alg.select_action(
-                    torch.cat((torch.tensor(state, device=device, dtype=torch.float32), goal), dim=0))
+                action = rl_alg.select_action(np.concatenate((state, goal)))
                 next_state, reward, terminal, truncate, info = env.step(action)
                 live_buffer.add(state, action, next_state)
-                out_data.add(state, action, next_state, reward, terminal)
+                out_data.add(state, action, next_state, reward, terminal, truncate)
                 if terminal or truncate:
+                    if terminal or ('success' in info and info['success']):
+                        print('\n\nwooooo\n\n')
                     break
                 state = next_state
 
@@ -76,16 +82,16 @@ def run_gcrl_with_rnd(
     return out_data
 
 if __name__ == '__main__':
-    PATH_LENGTH = 500
+    PATH_LENGTH = 2000
     STATE_DIM = 39
     ACTION_DIM = 4
 
     ml1 = metaworld.ML1("pick-place-v2", seed=0)
-    env = ml1.train_classes["pick-place-v2"](render_mode="rgb_array")
+    env = ml1.train_classes["pick-place-v2"]()
     env.set_task(ml1.train_tasks[0])
     env.max_path_length = PATH_LENGTH
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
-
+    print(device)
 
     out_buffer = run_gcrl_with_rnd(
         state_dim=STATE_DIM,
@@ -102,10 +108,11 @@ if __name__ == '__main__':
         ).to(device),
         env=env,
         device=device,
-        num_train_cycles=10,
-        warm_up_cycles=2,
-        num_epi_per_cycle=2,
+        num_train_cycles=150,
+        warm_up_cycles=10,
+        num_epi_per_cycle=10,
         num_steps_per_epi=PATH_LENGTH
     )
     print(out_buffer.size, out_buffer.ptr)
     print(out_buffer.sample(5))
+    out_buffer.save('data/gcrl_2000.npz')
