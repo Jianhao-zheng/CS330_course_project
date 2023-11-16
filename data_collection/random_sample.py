@@ -6,7 +6,11 @@ import cv2
 import time
 import argparse
 
+from replay import ReplayBuffer
+
 SEED = 0
+STATE_DIM = 39
+ACTION_DIM = 4
 RANDOM_ACTION_KEY = " "
 END_ITER_KEY = "f"
 CV_WINDOW_NAME = "Robot"
@@ -35,12 +39,16 @@ def main(args):
     env.set_task(ml1.train_tasks[0])
     env.max_path_length = args.max_path_length
 
+    # set up reply buffer
+    out_data = ReplayBuffer(STATE_DIM, ACTION_DIM, max_size=args.num_iter*args.max_path_length)
+
     if args.save_data:
         collected_data = {'action':[[] for _ in range(args.num_iter)],'obs':[[] for _ in range(args.num_iter)],'info':[[] for _ in range(args.num_iter)],}
     for iter_idx in range(args.num_iter):
         print('*'*30)
         print('Environment reset')
         obs = env.reset()
+        state = obs[0]
         time.sleep(2)
 
         if args.visual:
@@ -76,26 +84,31 @@ def main(args):
             #            (bool): True if the current path length == max path length
             #            (dict): all the other information
             # For more detailed information, check the function of Class SawyerXYZEnv and SawyerPickPlaceEnvV2
-            obs, reward, done, truncate, info = env.step(action)
+            obs, reward, terminal, truncate, info = env.step(action)
 
-            print(
-                "A new step is executed.\nAction: delta_x={:.6f}, delta_y={:.6f}, delta_z={:.6f}, gripper_effort={:.6f}".format(
-                    action[0], action[1], action[2], action[3]
+            next_state = obs
+            out_data.add(state, action, next_state, reward, terminal or truncate)
+            state = next_state
+            
+            if args.verbose:
+                print(
+                    "A new step is executed.\nAction: delta_x={:.6f}, delta_y={:.6f}, delta_z={:.6f}, gripper_effort={:.6f}".format(
+                        action[0], action[1], action[2], action[3]
+                    )
                 )
-            )
-            print(
-                "Task success: {}; Grasp success: {}".format(info["success"], info["grasp_success"])
-            )
-            print(
-                "Total reward: {:.6f}; Grasp rewad: {:.6f}; In place reward: {:.6f}".format(
-                    reward, info["grasp_reward"], info["in_place_reward"]
+                print(
+                    "Task success: {}; Grasp success: {}".format(info["success"], info["grasp_success"])
                 )
-            )
-            x, y, z, qw, qx, qy, qz = obs[4:11]
-            print(
-                f"Current observation of object: position({x:.4f},{y:.4f},{z:.4f}), rotation({qw:.4f},{qx:.4f},{qy:.4f},{qz:.4f})"
-            )
-            print("Object distance to target: {:.6f}".format(info['obj_to_target']))
+                print(
+                    "Total reward: {:.6f}; Grasp rewad: {:.6f}; In place reward: {:.6f}".format(
+                        reward, info["grasp_reward"], info["in_place_reward"]
+                    )
+                )
+                x, y, z, qw, qx, qy, qz = obs[4:11]
+                print(
+                    f"Current observation of object: position({x:.4f},{y:.4f},{z:.4f}), rotation({qw:.4f},{qx:.4f},{qy:.4f},{qz:.4f})"
+                )
+                print("Object distance to target: {:.6f}".format(info['obj_to_target']))
             if info['obj_to_target'] < 0.2:
                 time.sleep(10)
             if args.visual:
@@ -112,15 +125,18 @@ def main(args):
         cv2.destroyAllWindows()
 
     if args.save_data:
-        np.savez(args.save_path,collected_data=collected_data)
+        out_data.save(args.save_path)
+        # np.savez(args.save_path,collected_data=collected_data)
 
 
 if __name__ == '__main__':
-    parser = argparse.ArgumentParser('Train a ProtoNet!')
+    parser = argparse.ArgumentParser('random sample')
     parser.add_argument('--visual', default=False, action='store_true',
                         help='whether to show the image of the current state of the robot')
     parser.add_argument('--save_data', default=False, action='store_true',
                         help='whether to save the collected data into args.save_path')
+    parser.add_argument('--verbose', default=False, action='store_true',
+                        help='whether to print information')
     parser.add_argument('--save_path', type=str, default='./collection.npz',
                         help='path to save the collected data')
     parser.add_argument('--num_iter', type=int, default=1,
