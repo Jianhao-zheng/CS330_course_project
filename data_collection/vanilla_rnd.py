@@ -10,7 +10,7 @@ from rnd import RNDModel
 from td3 import TD3
 from render_video import MetaWorldVideo
 
-OUT_DIR = './rnd_data1'
+OUT_DIR = './rnd_data12'
 
 
 
@@ -24,11 +24,11 @@ def run_vanilla_rnd(
     num_train_cycles=150,
     num_epi_per_cycle=10,
     num_steps_per_epi=500,
-    num_opt_iters=100,
+    num_opt_iters=10,
 ) -> ReplayBuffer:
     
     max_samples = num_train_cycles * num_epi_per_cycle * num_steps_per_epi
-    rnd_optimizer = torch.optim.Adam(rnd.predictor.parameters(), lr=0.001)
+    rnd_optimizer = torch.optim.Adam(rnd.predictor.parameters(), lr=1e-5)
     out_data = ReplayBuffer(state_dim, action_dim, max_size=max_samples)
 
     max_reward = 0
@@ -36,12 +36,13 @@ def run_vanilla_rnd(
 
     # TODO: initialize observation normalization parameters
 
+    vid = MetaWorldVideo()
     for c in range(num_train_cycles):
-        vid = MetaWorldVideo() if c % 1 == 0 else None
+        #vid = MetaWorldVideo() if c % 1 == 0 else None
         
         state, _ = env.reset()
 
-        for e in tqdm(range(num_epi_per_cycle), desc='Training episodes'):
+        for e in tqdm(range(num_epi_per_cycle), desc=f'Cycle {c} episodes'):
             rnd_rewards = []
 
             for t in range(num_steps_per_epi):
@@ -66,11 +67,12 @@ def run_vanilla_rnd(
                 # TODO: Update reward normalization parameters
 
                 if vid and t % 10 == 0:
-                    vid.add_frame(env)
+                    vid.add_frame(env, f'Cycle {c} Ep {e}\nRND reward: {rnd_reward:.8f}\nExtrinsic reward (unused): {reward:.4f}')
 
             ep_step_count = len(rnd_rewards)
             rnd_rewards = torch.stack(rnd_rewards)
-            rnd_rewards = torch.nn.functional.normalize(rnd_rewards, dim=0)
+            #rnd_rewards = torch.nn.functional.normalize(rnd_rewards, dim=0)
+            #rnd_rewards = (rnd_rewards - rnd_rewards.mean()) / rnd_rewards.std()
             # TODO: Update observation normalization parameters
 
             states, actions, next_states, _, terminals = out_data.sample_last_n(ep_step_count)
@@ -88,8 +90,9 @@ def run_vanilla_rnd(
                 rnd_optimizer.step()
                 rnd_optimizer.zero_grad()
 
-        if vid:
-            vid.save(f'{OUT_DIR}/{c}.mp4')
+        if vid and c % 1 == 0:
+            vid.save(f'{OUT_DIR}/vid.mp4')
+            vid = MetaWorldVideo()
 
     print(f'Max reward: {max_reward}')
     print(f'Max reward iter: {max_reward_iter}')
@@ -99,8 +102,9 @@ def run_vanilla_rnd(
 
 
 if __name__ == '__main__':
-    EP_LENGTH = 500
-    EPS_PER_CYCLE = 5
+    EP_LENGTH = 50
+    EPS_PER_CYCLE = 25
+    OPT_ITERS = 32
     STATE_DIM = 39
     ACTION_DIM = 4
 
@@ -120,8 +124,9 @@ if __name__ == '__main__':
             state_dim=STATE_DIM,
             action_dim=ACTION_DIM,
             max_action=1,
-            actor_lr=3e-4,
-            critic_lr=3e-4,
+            tau=0.02,
+            actor_lr=3e-7,
+            critic_lr=3e-7,
             device=device,
         ),
         rnd=RNDModel(
@@ -132,10 +137,11 @@ if __name__ == '__main__':
         device=device,
         num_steps_per_epi=EP_LENGTH,
         num_epi_per_cycle=EPS_PER_CYCLE,
-        num_train_cycles=5,
+        num_opt_iters=OPT_ITERS,
+        num_train_cycles=600,
     )
 
-    print(out_buffer.size, out_buffer.ptr)
-    print(out_buffer.sample(5))
+    #print(out_buffer.size, out_buffer.ptr)
+    #print(out_buffer.sample(5))
 
     out_buffer.save(f'{OUT_DIR}/vanilla_rnd.npz')
