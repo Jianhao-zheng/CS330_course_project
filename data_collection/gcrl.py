@@ -1,7 +1,11 @@
 import uuid
+from copy import deepcopy
 
 import torch
 import metaworld
+from tqdm import tqdm
+import numpy as np
+
 import wandb
 
 from data_collection.replay import ReplayBuffer
@@ -142,12 +146,12 @@ class GCRLRNDDataCollection(DataCollectionAlgorithm):
                     })
 
 if __name__ == '__main__':
-    PATH_LENGTH = 500
+    PATH_LENGTH = 2000
     STATE_DIM = 39
     ACTION_DIM = 4
 
     ml1 = metaworld.ML1("pick-place-v2", seed=0)
-    env = ml1.train_classes["pick-place-v2"](render_mode="rgb_array")
+    env = ml1.train_classes["pick-place-v2"]()
     env.set_task(ml1.train_tasks[0])
     env.max_path_length = PATH_LENGTH
     env._partially_observable = False,
