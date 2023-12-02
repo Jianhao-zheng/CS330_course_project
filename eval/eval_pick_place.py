@@ -5,9 +5,9 @@ import random
 import cv2
 import time
 import argparse
-from tqdm import tqdm
+import d3rlpy
 
-from replay import ReplayBuffer
+from data_collection.replay import ReplayBuffer
 
 SEED = 0
 STATE_DIM = 39
@@ -15,13 +15,14 @@ ACTION_DIM = 4
 RANDOM_ACTION_KEY = " "
 END_ITER_KEY = "f"
 CV_WINDOW_NAME = "Robot"
+visual_id = 0
 
 
-def visualize(image):
+def visualize(image, dist):
     img_with_txt = image.copy()
-    text_position = (10, 20)
+    text_position = (10, 18)
     font = cv2.FONT_ITALIC
-    font_scale = 0.6
+    font_scale = 0.5
     font_color = (1, 1, 1)  # White color
     line_type = 1
     cv2.putText(
@@ -34,7 +35,7 @@ def visualize(image):
         line_type,
         cv2.LINE_AA,
     )
-    text_position = (10, 40)
+    text_position = (10, 36)
     cv2.putText(
         img_with_txt,
         "press 'f' to end this iter",
@@ -46,7 +47,22 @@ def visualize(image):
         cv2.LINE_AA,
     )
 
+    text_position = (10, 54)
+    cv2.putText(
+        img_with_txt,
+        "Object distance to target: {:.6f}".format(dist),
+        text_position,
+        font,
+        font_scale,
+        font_color,
+        line_type,
+        cv2.LINE_AA,
+    )
+
     cv2.imshow(CV_WINDOW_NAME, img_with_txt)
+    global visual_id
+    cv2.imwrite("imgs/frame_{}.png".format(visual_id), img_with_txt)
+    visual_id += 1
 
 
 def main(args):
@@ -56,16 +72,19 @@ def main(args):
     # Create an environment with task `pick_place`
     # arg:render_mode="rgb_array" is activated so that we can get images to monitor what's going on
     env = ml1.train_classes["pick-place-v2"](render_mode="rgb_array")
+    eval_env_orders = list(range(50))
+    random.shuffle(eval_env_orders)
 
-    if args.save_data:
-        # set up reply buffer
-        out_data = ReplayBuffer(
-            STATE_DIM, ACTION_DIM, max_size=args.num_iter * args.max_path_length
-        )
-    for iter_idx in tqdm(range(args.num_iter)):
+    # load model from the checkpoint
+    model = d3rlpy.load_learnable(args.ckpt, device="cuda:0")
+
+    # count the number of successful environment
+    count_success = 0
+
+    assert args.num_eval_tasks <= 50
+    for eval_env_idx in range(args.num_eval_tasks):
         # Set task (totally 50 tasks for this environment)
-        # env.set_task(ml1.train_tasks[0])
-        env.set_task(ml1.train_tasks[random.randint(0, 49)])
+        env.set_task(ml1.train_tasks[eval_env_orders[eval_env_idx]])
         env.max_path_length = args.max_path_length
         env._partially_observable = False
         if args.verbose:
@@ -73,45 +92,29 @@ def main(args):
             print("Environment reset")
         obs = env.reset()
         state = obs[0]
+        obs = obs[0]
 
         if args.visual:
-            visualize(env.render()[:, :, ::-1])
+            visualize(env.render()[:, :, ::-1], np.linalg.norm(state[4:7] - state[-3:]))
         truncate = False
         while not truncate:
             keystroke = cv2.waitKey(0)
+            if args.verbose:
+                print("predict action")
 
             if args.visual:
                 if keystroke == ord(RANDOM_ACTION_KEY):
-                    # Randomly sample an action from the possible action space
-                    # the action is an numpy array with shape 4 representing the following:
-                    #           [delta(x), delta(y), delta(z), gripper_effort]
-                    action = env.action_space.sample()
+                    action = model.predict(obs.reshape((1, -1)))[0]
                 elif keystroke == ord(END_ITER_KEY):
                     break
                 else:
-                    print("Undefined key")
+                    if args.verbose:
+                        print("Undefined key")
                     continue
             else:
-                action = env.action_space.sample()
+                action = model.predict(obs.reshape((1, -1)))[0]
 
-            # run one step of action
-            # The env.step function Returns:
-            #            (np.ndarray): the last stable observation (39,) by concatenating [curr_obs(18,), prev_obs(18,), pos_goal(3,)]
-            #                          An observation contains: [position of the end effector(3,),
-            #                                                    gripper_distance_apart(1,),
-            #                                                    position of the object1(3,), quaternion of the object1(4,),
-            #                                                    position of the object2(3,), quaternion of the object2(4,),]
-            #                          In this environment, states of obj2 are all zeros.
-            #            (float): Reward
-            #            (bool): termination_flag (step function will always return a false)
-            #            (bool): True if the current path length == max path length
-            #            (dict): all the other information
-            # For more detailed information, check the function of Class SawyerXYZEnv and SawyerPickPlaceEnvV2
             obs, reward, terminal, truncate, info = env.step(action)
-
-            next_state = obs
-            out_data.add(state, action, next_state, reward, terminal)
-            state = next_state
 
             if args.verbose:
                 print(
@@ -133,33 +136,34 @@ def main(args):
                 print(
                     f"Current observation of object: position({x:.4f},{y:.4f},{z:.4f}), rotation({qw:.4f},{qx:.4f},{qy:.4f},{qz:.4f})"
                 )
-            if args.visual:
-                visualize(env.render()[:, :, ::-1])
-            if info["success"]:
-                print("the task is successful!")
-                break
+                print("Object distance to target: {:.6f}".format(info["obj_to_target"]))
 
+            if args.visual:
+                visualize(env.render()[:, :, ::-1], info["obj_to_target"])
+            if info["success"]:
+                count_success += 1
+                if args.verbose:
+                    print("the task is successful!")
+                break
         else:
-            print("Maximum length of step reached!")
+            if args.verbose:
+                print("Maximum length of step reached!")
         cv2.destroyAllWindows()
 
-    if args.save_data:
-        out_data.save(args.save_path)
+    print(
+        "The overall success rate is : {:.2f}".format(
+            count_success / args.num_eval_tasks
+        )
+    )
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser("random sample")
+    parser = argparse.ArgumentParser("evaluate the trained model")
     parser.add_argument(
         "--visual",
         default=False,
         action="store_true",
         help="whether to show the image of the current state of the robot",
-    )
-    parser.add_argument(
-        "--save_data",
-        default=False,
-        action="store_true",
-        help="whether to save the collected data into args.save_path",
     )
     parser.add_argument(
         "--verbose",
@@ -168,19 +172,22 @@ if __name__ == "__main__":
         help="whether to print information",
     )
     parser.add_argument(
-        "--save_path",
+        "--ckpt",
         type=str,
-        default="./collection.npz",
-        help="path to save the collected data",
-    )
-    parser.add_argument(
-        "--num_iter", type=int, default=1, help="number of iterations to run"
+        default="./model/expert_iql.d3",
+        help="path to the saved model",
     )
     parser.add_argument(
         "--max_path_length",
         type=int,
         default=500,
         help="the maximum length of path, if this is reached, the iteration will end",
+    )
+    parser.add_argument(
+        "--num_eval_tasks",
+        type=int,
+        default=50,
+        help="number of evaluated tasks, should be in the range of [1,50]",
     )
 
     args = parser.parse_args()

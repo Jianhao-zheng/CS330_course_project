@@ -2,7 +2,14 @@ import numpy as np
 import torch
 
 class ReplayBuffer:
-    def __init__(self, state_dim, action_dim, max_size=int(1e6), track_reward=True, track_terminal=True):
+    def __init__(self,
+                 state_dim,
+                 action_dim,
+                 max_size=int(1e6),
+                 track_reward=True,
+                 track_terminal=True,
+                 track_truncate=False,
+        ):
         self.max_size = max_size
         self.ptr = 0
         self.size = 0
@@ -19,12 +26,15 @@ class ReplayBuffer:
         if track_terminal:
             self.key_order.append('terminal')
             self.buffer['terminal'] = np.zeros((max_size, 1))
+        if track_truncate:
+            self.key_order.append('truncate')
+            self.buffer['truncate'] = np.zeros((max_size, 1))
 
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-    def add(self, state, action, next_state, reward=None, terminal=None):
+    def add(self, state, action, next_state, reward=None, terminal=None, truncate=None):
         self.buffer['state'][self.ptr] = state
         self.buffer['action'][self.ptr] = action
         self.buffer['next_state'][self.ptr] = next_state
@@ -32,6 +42,8 @@ class ReplayBuffer:
             self.buffer['reward'][self.ptr] = reward
         if terminal is not None:
             self.buffer['terminal'][self.ptr] = terminal
+        if truncate is not None:
+            self.buffer['truncate'][self.ptr] = truncate
 
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
@@ -60,12 +72,17 @@ class ReplayBuffer:
                  ptr=self.ptr,
                  **self.buffer)
 
+    def __getitem__(self, x):
+        return self.buffer[x]
+
     @staticmethod
     def load(path):
         d = np.load(path)
         dummy = ReplayBuffer(1, 1, 1,
-                             track_reward=('reward' in d['key_order']),
-                             track_terminal=('terminal' in d['key_order']))
+            track_reward=('reward' in d['key_order']),
+            track_terminal=('terminal' in d['key_order']),
+            track_truncate=('truncate' in d['key_order']),
+        )
         dummy.key_order = list(d['key_order'])
         dummy.max_size = int(d['max_size'])
         dummy.size = int(d['size'])
@@ -77,4 +94,6 @@ class ReplayBuffer:
             dummy.buffer['reward'] = d['reward']
         if 'terminal' in d['key_order']:
             dummy.buffer['terminal'] = d['terminal']
+        if 'truncate' in d['key_order']:
+            dummy.buffer['truncate'] = d['truncate']
         return dummy
