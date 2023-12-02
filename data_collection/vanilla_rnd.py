@@ -11,7 +11,7 @@ from td3 import TD3
 from render_video import MetaWorldVideo
 from normalizer import RunningNormalizer
 
-OUT_DIR = './rnd_data14'
+OUT_DIR = './rnd_data20'
 
 
 
@@ -27,10 +27,11 @@ def run_vanilla_rnd(
     num_steps_per_epi=500,
     num_rand_actions=100,
     num_opt_iters=10,
+    exploration=0.2,
 ) -> ReplayBuffer:
     
     max_samples = num_train_cycles * num_epi_per_cycle * num_steps_per_epi
-    rnd_optimizer = torch.optim.Adam(rnd.predictor.parameters(), lr=1e-5)
+    rnd_optimizer = torch.optim.Adam(rnd.predictor.parameters(), lr=1e-3)
     rnd_reward_normalizer = RunningNormalizer(device=device)
     rnd_obs_normalizer = RunningNormalizer(device=device, clamp=(-5,5))
     out_data = ReplayBuffer(state_dim, action_dim, max_size=max_samples)
@@ -64,6 +65,8 @@ def run_vanilla_rnd(
             for t in range(num_steps_per_epi):
 
                 action = rl_alg.select_action(state)
+                rand_action = env.action_space.sample()
+                action = (1.0 - exploration) * action + exploration * rand_action
                 
                 next_state, reward, terminal, truncate, info = env.step(action)
                 if reward > max_reward:
@@ -88,7 +91,7 @@ def run_vanilla_rnd(
 
             ep_step_count = len(rnd_rewards)
             rnd_rewards = torch.stack(rnd_rewards)
-            rnd_rewards = rnd_reward_normalizer(rnd_rewards, do_center=False, batched=True)
+            rnd_rewards = rnd_reward_normalizer(rnd_rewards, batched=True)
             #rnd_rewards = torch.nn.functional.normalize(rnd_rewards, dim=0)
             #rnd_rewards = (rnd_rewards - rnd_rewards.mean()) / rnd_rewards.std()
             # TODO: Update observation normalization parameters
@@ -105,7 +108,7 @@ def run_vanilla_rnd(
                 rnd_obs_normalizer.update(states[idx_order], batched=True)
                 pred_out, target_out = rnd(rnd_obs_normalizer(states[idx_order], batched=True))
                 rnd_losses = torch.square(pred_out - target_out).sum(1)
-                rnd_losses = rnd_reward_normalizer(rnd_losses, do_center=False, batched=True)
+                rnd_losses = rnd_reward_normalizer(rnd_losses, batched=True)
                 rnd_losses.mean().backward()
                 rnd_optimizer.step()
                 rnd_optimizer.zero_grad()
@@ -126,8 +129,8 @@ def run_vanilla_rnd(
 
 if __name__ == '__main__':
     EP_LENGTH = 50
-    EPS_PER_CYCLE = 25
-    OPT_ITERS = 32
+    EPS_PER_CYCLE = 20
+    OPT_ITERS = 1
     NUM_RAND_ACTS = 2048
     STATE_DIM = 39
     ACTION_DIM = 4
@@ -139,6 +142,7 @@ if __name__ == '__main__':
     env = ml1.train_classes["pick-place-v2"](render_mode="rgb_array")
     env.set_task(ml1.train_tasks[0])
     env.max_path_length = EP_LENGTH * EPS_PER_CYCLE + NUM_RAND_ACTS + 1
+    env._partially_observable = False
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     out_buffer = run_vanilla_rnd(
@@ -147,12 +151,12 @@ if __name__ == '__main__':
         rl_alg=TD3(
             state_dim=STATE_DIM,
             action_dim=ACTION_DIM,
-            max_action=1,
-            tau=0.4,
-            policy_noise=3.0,
-            noise_clip=10.0,
-            actor_lr=1e-4,
-            critic_lr=1e-4,
+            max_action=0.5,
+            tau=0.1,
+            policy_noise=0.2,
+            noise_clip=0.5,
+            actor_lr=3e-3,
+            critic_lr=3e-3,
             device=device,
         ),
         rnd=RNDModel(
@@ -166,6 +170,7 @@ if __name__ == '__main__':
         num_opt_iters=OPT_ITERS,
         num_rand_actions=NUM_RAND_ACTS,
         num_train_cycles=600,
+        exploration=0.5
     )
 
     #print(out_buffer.size, out_buffer.ptr)
