@@ -46,8 +46,15 @@ class TD3:
 
 
     def select_action(self, state):
-        state = torch.FloatTensor(state.reshape(1, -1)).to(self.device)
         return self.actor(state).cpu().data.numpy().flatten()
+
+    def select_action_with_noise(self, state):
+        action = self.actor(state)
+        noise = (
+            torch.randn_like(action) * self.policy_noise
+        ).clamp(-self.noise_clip, self.noise_clip)
+        action_with_noise = (action + noise).clamp(-self.max_action, self.max_action)
+        return action_with_noise.cpu().data.numpy().flatten()
 
 
     def train_step(self, train_batch):
@@ -57,7 +64,6 @@ class TD3:
         state, action, next_state, reward, done = train_batch
         reward = reward[:, None]
         done = done[:, None]
-        # print(state.shape, action.shape, next_state.shape, reward.shape, done.shape)
         with torch.no_grad():
             # Select action according to policy and add clipped noise
             noise = (
@@ -77,7 +83,6 @@ class TD3:
         current_Q1, current_Q2 = self.critic(state, action)
 
         # Compute critic loss
-        # print(current_Q1.shape, target_Q.shape)
         critic_loss = F.mse_loss(current_Q1, target_Q) + F.mse_loss(current_Q2, target_Q)
 
         # Optimize the critic

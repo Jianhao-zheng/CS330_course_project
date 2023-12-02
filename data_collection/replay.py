@@ -9,6 +9,7 @@ class ReplayBuffer:
                  track_reward=True,
                  track_terminal=True,
                  track_truncate=False,
+                 track_goal=False,
         ):
         self.max_size = max_size
         self.ptr = 0
@@ -29,12 +30,14 @@ class ReplayBuffer:
         if track_truncate:
             self.key_order.append('truncate')
             self.buffer['truncate'] = np.zeros((max_size, 1))
-
+        if track_goal:
+            self.key_order.append('goal')
+            self.buffer['goal'] = np.zeros((max_size, state_dim))
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-    def add(self, state, action, next_state, reward=None, terminal=None, truncate=None):
+    def add(self, state, action, next_state, reward=None, terminal=None, truncate=None, goal=None):
         self.buffer['state'][self.ptr] = state
         self.buffer['action'][self.ptr] = action
         self.buffer['next_state'][self.ptr] = next_state
@@ -44,6 +47,8 @@ class ReplayBuffer:
             self.buffer['terminal'][self.ptr] = terminal
         if truncate is not None:
             self.buffer['truncate'][self.ptr] = truncate
+        if goal is not None:
+            self.buffer['goal'][self.ptr] = goal
 
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
@@ -82,6 +87,7 @@ class ReplayBuffer:
             track_reward=('reward' in d['key_order']),
             track_terminal=('terminal' in d['key_order']),
             track_truncate=('truncate' in d['key_order']),
+            track_goal=('goal' in d['key_order']),
         )
         dummy.key_order = list(d['key_order'])
         dummy.max_size = int(d['max_size'])
@@ -96,4 +102,6 @@ class ReplayBuffer:
             dummy.buffer['terminal'] = d['terminal']
         if 'truncate' in d['key_order']:
             dummy.buffer['truncate'] = d['truncate']
+        if 'goal' in d['key_order']:
+            dummy.buffer['goal'] = d['goal']
         return dummy
