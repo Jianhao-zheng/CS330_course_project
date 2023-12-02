@@ -72,6 +72,9 @@ class ReplayBuffer:
                  ptr=self.ptr,
                  **self.buffer)
 
+    def __getitem__(self, x):
+        return self.buffer[x]
+
     @staticmethod
     def load(path):
         d = np.load(path)
