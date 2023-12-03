@@ -11,7 +11,7 @@ from td3 import TD3
 from render_video import MetaWorldVideo
 from normalizer import RunningNormalizer
 
-OUT_DIR = './rnd_data14'
+OUT_DIR = './rnd_data23_full'
 
 
 
@@ -27,10 +27,12 @@ def run_vanilla_rnd(
     num_steps_per_epi=500,
     num_rand_actions=100,
     num_opt_iters=10,
+    exploration=0.2,
+    randomize_task=True
 ) -> ReplayBuffer:
     
     max_samples = num_train_cycles * num_epi_per_cycle * num_steps_per_epi
-    rnd_optimizer = torch.optim.Adam(rnd.predictor.parameters(), lr=1e-5)
+    rnd_optimizer = torch.optim.Adam(rnd.predictor.parameters(), lr=1e-4)
     rnd_reward_normalizer = RunningNormalizer(device=device)
     rnd_obs_normalizer = RunningNormalizer(device=device, clamp=(-5,5))
     out_data = ReplayBuffer(state_dim, action_dim, max_size=max_samples)
@@ -38,11 +40,20 @@ def run_vanilla_rnd(
     max_reward = 0
     max_reward_iter = (0,0,0)
 
+    vid_iters_per_frame = 10
+    vid_cycle_step = 10
+    vid_cyles_per_vid = 50
+
     vid = MetaWorldVideo()
     for c in range(num_train_cycles):
         #vid = MetaWorldVideo() if c % 1 == 0 else None
         
+        if randomize_task:
+            env.set_task(ml1.train_tasks[np.random.randint(0, 49)])
+            env.max_path_length = num_epi_per_cycle * num_steps_per_epi + num_rand_actions + 1
+            env._partially_observable = False
         state, _ = env.reset()
+
         rnd_reward_normalizer.reset()
         rnd_obs_normalizer.reset()
         cycle_done = False
@@ -64,6 +75,8 @@ def run_vanilla_rnd(
             for t in range(num_steps_per_epi):
 
                 action = rl_alg.select_action(state)
+                rand_action = env.action_space.sample()
+                action = (1.0 - exploration) * action + exploration * rand_action
                 
                 next_state, reward, terminal, truncate, info = env.step(action)
                 if reward > max_reward:
@@ -83,7 +96,7 @@ def run_vanilla_rnd(
 
                 # TODO: Update reward normalization parameters
 
-                if vid and t % 10 == 0:
+                if vid and t % vid_iters_per_frame == 0 and c % vid_cycle_step == 0:
                     vid.add_frame(env, f'Cycle {c} Ep {e}\nRND reward: {rnd_reward:.8f}\nExtrinsic reward (unused): {reward:.4f}')
 
             ep_step_count = len(rnd_rewards)
@@ -113,8 +126,9 @@ def run_vanilla_rnd(
             if cycle_done:
                 break
 
-        if vid and c % 10 == 9:
-            vid.save(f'{OUT_DIR}/{c-9}.mp4')
+        vid_max_cycles = vid_cyles_per_vid * vid_cycle_step
+        if vid and c % vid_max_cycles == (vid_max_cycles-1):
+            vid.save(f'{OUT_DIR}/{c-(vid_max_cycles-1)}.mp4')
             vid = MetaWorldVideo()
 
     print(f'Max reward: {max_reward}')
@@ -126,9 +140,9 @@ def run_vanilla_rnd(
 
 if __name__ == '__main__':
     EP_LENGTH = 50
-    EPS_PER_CYCLE = 25
-    OPT_ITERS = 32
-    NUM_RAND_ACTS = 2048
+    EPS_PER_CYCLE = 40
+    OPT_ITERS = 16
+    NUM_RAND_ACTS = 50
     STATE_DIM = 39
     ACTION_DIM = 4
 
@@ -139,6 +153,7 @@ if __name__ == '__main__':
     env = ml1.train_classes["pick-place-v2"](render_mode="rgb_array")
     env.set_task(ml1.train_tasks[0])
     env.max_path_length = EP_LENGTH * EPS_PER_CYCLE + NUM_RAND_ACTS + 1
+    env._partially_observable = False
     device = torch.device('cuda') if torch.cuda.is_available() else torch.device('cpu')
 
     out_buffer = run_vanilla_rnd(
@@ -147,17 +162,17 @@ if __name__ == '__main__':
         rl_alg=TD3(
             state_dim=STATE_DIM,
             action_dim=ACTION_DIM,
-            max_action=1,
-            tau=0.4,
-            policy_noise=3.0,
-            noise_clip=10.0,
-            actor_lr=1e-4,
-            critic_lr=1e-4,
+            max_action=0.5,
+            tau=0.01,
+            policy_noise=0.2,
+            noise_clip=0.5,
+            actor_lr=3e-4,
+            critic_lr=3e-4,
             device=device,
         ),
         rnd=RNDModel(
             input_size=STATE_DIM,
-            output_size=512,
+            output_size=128,
         ).to(device),
         env=env,
         device=device,
@@ -165,7 +180,9 @@ if __name__ == '__main__':
         num_epi_per_cycle=EPS_PER_CYCLE,
         num_opt_iters=OPT_ITERS,
         num_rand_actions=NUM_RAND_ACTS,
-        num_train_cycles=600,
+        num_train_cycles=400,
+        exploration=0.85,
+        randomize_task=True
     )
 
     #print(out_buffer.size, out_buffer.ptr)
