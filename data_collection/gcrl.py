@@ -14,6 +14,7 @@ import wandb
 from data_collection.replay import ReplayBuffer
 from data_collection.rnd import RNDModel
 from data_collection.td3 import TD3
+from data_collection.sac import SAC
 from data_collection.base import DataCollectionAlgorithm
 
 logging.basicConfig(stream=sys.stdout, level=logging.DEBUG)
@@ -93,8 +94,19 @@ class GCRLRNDDataCollection(DataCollectionAlgorithm):
                     log_dict['goal_rnd'] = goal_rnd
                 wandb.log(log_dict)
         else:
-            goal = torch.tensor(self.env.observation_space.sample(), dtype=torch.float32, device=self.device)
+            goal = self.env.observation_space.sample()
+
+            # make initial goals just arm movement
+            goal[7:18] = 0 # no obj rotation
+            goal[10] = 1
+            goal[25:36] = 0
+            goal[28] = 1
+            goal[-3:] = state[-3:] # target loc
+            goal[4:7] = state[4:7] # obj location
+            goal[22:25] = state[22:25]
+
             goal = goal[:39]
+            goal = torch.tensor(goal, dtype=torch.float32, device=self.device)
             with np.printoptions(precision=3, suppress=True):
                 logging.debug(f'Goal location: \n{goal.cpu().numpy()}')
         
@@ -102,10 +114,10 @@ class GCRLRNDDataCollection(DataCollectionAlgorithm):
             self.epi_step += 1
             self.cycle_step += 1
             self.step += 1
-            if random.random() < 0.0:
+            if random.random() < 0.1:
                 action = env.action_space.sample()
             else:
-                action = self.rl_alg.select_action(
+                action = self.rl_alg.select_action_with_noise(
                     torch.cat((torch.tensor(state_short, device=device, dtype=torch.float32), goal), dim=0))
             next_state, reward, terminal, truncate, info = env.step(action)
             next_state_short = next_state[:39] #
@@ -145,90 +157,98 @@ class GCRLRNDDataCollection(DataCollectionAlgorithm):
             state_short = next_state_short
 
         if cycle_idx >= self.warm_up_cycles:
-            bs = 32
-            r_shape_max = 1
+            h_bs = 32
+            c_bs = 4
+            r_shape_max = 0
 
             # sample last for concurrent part
             last_states, last_actions, last_next_states, last_goals = self.live_buffer.sample_last_n(self.epi_step)
 
-            # for i in range(self.max_steps_per_episode):
-            n_updates = self.epi_step // bs + 1
-            for i in range(n_updates):
+            for i in range(self.max_steps_per_episode):
+            # n_updates = self.epi_step // bs + 1
+            # for i in range(n_updates):
                 
                 # Hindsight part
-                # h_states, h_actions, h_next_states, h_goals = self.live_buffer.sample(bs)
-                # h_goal_samples = h_states[torch.randint(high=bs, size=(bs,)), :]
+                h_states, h_actions, h_next_states, h_goals = self.live_buffer.sample(h_bs)
+                # # h_goal_samples = h_states[torch.randint(high=h_bs, size=(h_bs,)), :]
                 # h_goals_dup = torch.cat((h_goals, h_goal_samples), dim=0)
                 # h_states_dup = torch.cat((h_states, h_states), dim=0)
                 # h_actions_dup = torch.cat((h_actions, h_actions), dim=0)
                 # h_next_states_dup = torch.cat((h_next_states, h_next_states), dim=0)
-                # h_rewards = -(~(torch.all(torch.isclose(h_states_dup, h_goals_dup), dim=-1))).float()
-                # h_rewards /= self.max_steps_per_episode
-                # # h_r_shape = torch.clamp(r_shape_max / 100 / torch.sum((h_next_states - h_goals)**2, dim=-1), max=r_shape_max)
-                # h_r_shape = r_shape_max - torch.sqrt(torch.sum((h_next_states - h_goals)**2, dim=-1)) / 10
-                # h_r_shape_mean = torch.mean(h_r_shape).item()
-                # h_rewards[:bs] += h_r_shape
-                # h_terminals_dup = torch.logical_or(
-                #     torch.all(torch.isclose(h_states_dup, h_goals_dup), dim=-1),
-                #     torch.all(torch.isclose(h_next_states_dup, h_goals_dup), dim=-1)).float()
-                # h_train_states_dup = torch.cat((h_states_dup, h_goals_dup), dim=-1)
-                # h_train_next_states_dup = torch.cat((h_next_states_dup, h_goals_dup), dim=-1)
+                h_rewards = -(~(torch.all(torch.isclose(h_states, h_goals), dim=-1))).float()
+                h_rewards /= self.max_steps_per_episode
+                # h_r_shape = torch.clamp(r_shape_max / 100 / torch.sum((h_next_states - h_goals)**2, dim=-1), max=r_shape_max)
+                # h_r_shape = r_shape_max - torch.sum((h_next_states - h_goals)**2, dim=-1) / 10
+                h_r_shape = r_shape_max - torch.sum((h_next_states - h_goals)**2, dim=-1) / 50
+                h_r_shape_mean = torch.mean(h_r_shape).item()
+                # h_rewards[:h_bs] += h_r_shape
+                h_rewards += h_r_shape
+                h_terminals = torch.logical_or(
+                    torch.all(torch.isclose(h_states, h_goals), dim=-1),
+                    torch.all(torch.isclose(h_next_states, h_goals), dim=-1)).float()
+                h_train_states = torch.cat((h_states, h_goals), dim=-1)
+                h_train_next_states = torch.cat((h_next_states, h_goals), dim=-1)
                 
                 # Concurrent part
-                b_range = random.sample(range(self.epi_step), bs)
+                b_range = random.sample(range(self.epi_step), c_bs)
                 c_states, c_actions, c_next_states, c_goals = last_states[b_range], last_actions[b_range], last_next_states[b_range], last_goals[b_range]
-                c_goal_samples = c_states[torch.randint(high=bs, size=(bs,)), :]
-                c_goals_dup = torch.cat((c_goals, c_goal_samples), dim=0)
-                c_states_dup = torch.cat((c_states, c_states), dim=0)
-                c_actions_dup = torch.cat((c_actions, c_actions), dim=0)
-                c_next_states_dup = torch.cat((c_next_states, c_next_states), dim=0)
-                c_rewards = -(~(torch.all(torch.isclose(c_states_dup, c_goals_dup), dim=-1))).float()
+                # c_goal_samples = c_states[torch.randint(high=c_bs, size=(c_bs,)), :]
+                # c_goals_dup = torch.cat((c_goals, c_goal_samples), dim=0)
+                # c_states_dup = torch.cat((c_states, c_states), dim=0)
+                # c_actions_dup = torch.cat((c_actions, c_actions), dim=0)
+                # c_next_states_dup = torch.cat((c_next_states, c_next_states), dim=0)
+                c_rewards = -(~(torch.all(torch.isclose(c_states, c_goals), dim=-1))).float()
                 c_rewards /= self.max_steps_per_episode
                 # c_r_shape = torch.clamp(r_shape_max / 100 / torch.sum((c_next_states - c_goals)**2, dim=-1), max=r_shape_max)
-                c_r_shape = r_shape_max - torch.sqrt(torch.sum((c_next_states - c_goals)**2, dim=-1)) / 10
+                # c_r_shape = r_shape_max - torch.sum((c_next_states - c_goals)**2, dim=-1) / 10
+                c_r_shape = r_shape_max - torch.sum((c_next_states - c_goals)**2, dim=-1) / 50
                 c_r_shape_mean = torch.mean(c_r_shape).item()
-                c_rewards[:bs] += c_r_shape
-                c_terminals_dup = torch.logical_or(
-                    torch.all(torch.isclose(c_states_dup, c_goals_dup), dim=-1),
-                    torch.all(torch.isclose(c_next_states_dup, c_goals_dup), dim=-1)).float()
-                c_train_states_dup = torch.cat((c_states_dup, c_goals_dup), dim=-1)
-                c_train_next_states_dup = torch.cat((c_next_states_dup, c_goals_dup), dim=-1)
+                # c_rewards[:c_bs] += c_r_shape
+                c_rewards += c_r_shape
+                c_terminals = torch.logical_or(
+                    torch.all(torch.isclose(c_states, c_goals), dim=-1),
+                    torch.all(torch.isclose(c_next_states, c_goals), dim=-1)).float()
+                c_train_states = torch.cat((c_states, c_goals), dim=-1)
+                c_train_next_states = torch.cat((c_next_states, c_goals), dim=-1)
 
-                # full_states = torch.cat((h_train_states_dup, c_train_states_dup), dim=0)
-                # full_actions = torch.cat((h_actions_dup, c_actions_dup), dim=0)
-                # full_next_states = torch.cat((h_train_next_states_dup, c_train_next_states_dup), dim=0)
-                # full_rewards = torch.cat((h_rewards, c_rewards), dim=0)
-                # full_terminals = torch.cat((h_terminals_dup, c_terminals_dup), dim=0)
-                full_states = c_train_states_dup
-                full_actions = c_actions_dup
-                full_next_states = c_train_next_states_dup
-                full_rewards = c_rewards
-                full_terminals = c_terminals_dup
+                full_states = torch.cat((h_train_states, c_train_states), dim=0)
+                full_actions = torch.cat((h_actions, c_actions), dim=0)
+                full_next_states = torch.cat((h_train_next_states, c_train_next_states), dim=0)
+                full_rewards = torch.cat((h_rewards, c_rewards), dim=0)
+                full_terminals = torch.cat((h_terminals, c_terminals), dim=0)
+                # full_states = c_train_states_dup
+                # full_actions = c_actions_dup
+                # full_next_states = c_train_next_states_dup
+                # full_rewards = c_rewards
+                # full_terminals = c_terminals_dup
 
                 critic_loss, actor_loss = self.rl_alg.train_step((full_states, full_actions, full_next_states, full_rewards, full_terminals))
                 if self.use_wandb:
                     log_dict = {
                         'step': self.step,
-                        # 'episode': self.episodes_per_cycle * cycle_idx + episode_idx + i / self.max_steps_per_episode,
-                        # 'cycle': cycle_idx + episode_idx / self.episodes_per_cycle + i / self.max_steps_per_episode / self.episodes_per_cycle,
-                        'episode': self.episodes_per_cycle * cycle_idx + episode_idx + i / n_updates,
-                        'cycle': cycle_idx + episode_idx / self.episodes_per_cycle + i / n_updates / self.episodes_per_cycle,
-                        # 'hindsight_reward_shape_sum': h_r_shape_mean,
+                        'episode': self.episodes_per_cycle * cycle_idx + episode_idx + i / self.max_steps_per_episode,
+                        'cycle': cycle_idx + episode_idx / self.episodes_per_cycle + i / self.max_steps_per_episode / self.episodes_per_cycle,
+                        # 'episode': self.episodes_per_cycle * cycle_idx + episode_idx + i / n_updates,
+                        # 'cycle': cycle_idx + episode_idx / self.episodes_per_cycle + i / n_updates / self.episodes_per_cycle,
+                        'hindsight_reward_shape_sum': h_r_shape_mean,
                         'curr_reward_shape_sum': c_r_shape_mean,
                         'critic_loss': critic_loss,
                     }
                     if actor_loss is not None:
                         log_dict['actor_loss'] = actor_loss
                     wandb.log(log_dict)
-                if (i+1) % 5 == 0:
-                    # if actor_loss is not None:
-                    #     logging.debug(f'Step {i} Critic loss: {critic_loss:.3E}, Actor loss: {actor_loss:.3E}, Hindsight reward shape sum: {h_r_shape_mean:.3E}, Curr reward shape sum: {c_r_shape_mean:.3E}')
-                    # else:
-                    #     logging.debug(f'Step {i} Critic loss: {critic_loss:.3E}, Hindsight reward shape sum: {h_r_shape_mean:.3E}, Curr reward shape sum: {c_r_shape_mean:.3E}')
+                if (i+1) % 100 == 0:
                     if actor_loss is not None:
-                        logging.debug(f'Step {i} Critic loss: {critic_loss:.3E}, Actor loss: {actor_loss:.3E}, Curr reward shape sum: {c_r_shape_mean:.3E}')
+                        logging.debug(f'Step {i} Critic loss: {critic_loss:.3E}, Actor loss: {actor_loss:.3E}, Hindsight reward shape mean: {h_r_shape_mean:.3E}, Curr reward shape mean: {c_r_shape_mean:.3E}')
                     else:
-                        logging.debug(f'Step {i} Critic loss: {critic_loss:.3E}, Curr reward shape sum: {c_r_shape_mean:.3E}')
+                        logging.debug(f'Step {i} Critic loss: {critic_loss:.3E}, Hindsight reward shape mean: {h_r_shape_mean:.3E}, Curr reward shape mean: {c_r_shape_mean:.3E}')
+                    # print(c_next_states[:, :3])
+                    # print(c_goals[:, :3])
+                    # print(c_r_shape)
+                    # if actor_loss is not None:
+                    #     logging.debug(f'Step {i} Critic loss: {critic_loss:.3E}, Actor loss: {actor_loss:.3E}, Curr reward shape sum: {c_r_shape_mean:.3E}')
+                    # else:
+                    #     logging.debug(f'Step {i} Critic loss: {critic_loss:.3E}, Curr reward shape sum: {c_r_shape_mean:.3E}')
     
     def on_cycle_end(self, cycle_idx):
         if cycle_idx < self.warm_up_cycles:
@@ -272,14 +292,23 @@ if __name__ == '__main__':
     gcrl_rnd_col = GCRLRNDDataCollection(
         env=env,
         out_path='data/gcrl.npz',
-        rl_alg=TD3(
+        # rl_alg=TD3(
+        #     state_dim=STATE_DIM*2,
+        #     action_dim=ACTION_DIM,
+        #     max_action=1,
+        #     device=device,
+        #     actor_lr=3e-7,
+        #     critic_lr=1e-5,
+        # ),
+        rl_alg=SAC(
             state_dim=STATE_DIM*2,
             action_dim=ACTION_DIM,
             max_action=1,
-            device=device,
-            actor_lr=3e-6,
-            critic_lr=1e-5,
-        ),
+            hidden_dims=(300, 300),
+            actor_lr=1e-4,
+            critic_lr=1e-4,
+            alpha=0.05,
+        ).to(device),
         rnd=RNDModel(
             input_size=STATE_DIM,
             output_size=512,
@@ -289,11 +318,11 @@ if __name__ == '__main__':
         action_dim=ACTION_DIM,
         num_cycles=50,
         episodes_per_cycle=10,
-        warm_up_cycles=2,
+        warm_up_cycles=5,
         max_steps_per_episode=PATH_LENGTH,
         device=device,
         use_video=False,
-        use_wandb=False,
+        use_wandb=True,
     )
     gcrl_rnd_col.run()
 
