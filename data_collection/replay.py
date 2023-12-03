@@ -9,6 +9,7 @@ class ReplayBuffer:
                  track_reward=True,
                  track_terminal=True,
                  track_truncate=False,
+                 aux_cols=[],
         ):
         self.max_size = max_size
         self.ptr = 0
@@ -30,11 +31,14 @@ class ReplayBuffer:
             self.key_order.append('truncate')
             self.buffer['truncate'] = np.zeros((max_size, 1))
 
+        self.aux_cols = aux_cols
+        for a in aux_cols:
+            self.buffer[a] = np.zeros((max_size, 1))
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-    def add(self, state, action, next_state, reward=None, terminal=None, truncate=None):
+    def add(self, state, action, next_state, reward=None, terminal=None, truncate=None, **aux):
         self.buffer['state'][self.ptr] = state
         self.buffer['action'][self.ptr] = action
         self.buffer['next_state'][self.ptr] = next_state
@@ -44,33 +48,38 @@ class ReplayBuffer:
             self.buffer['terminal'][self.ptr] = terminal
         if truncate is not None:
             self.buffer['truncate'][self.ptr] = truncate
+        for k in aux:
+            self.buffer[k][self.ptr] = aux[k]
 
         self.ptr = (self.ptr + 1) % self.max_size
         self.size = min(self.size + 1, self.max_size)
 
-    def sample_last_n(self, n):
+    def sample_last_n(self, n, aux=False):
+        cols = (self.key_order + self.aux_cols) if aux else self.key_order
         if self.ptr < n:
             last_seg_idx = (self.ptr - n) % self.max_size
             return tuple(torch.FloatTensor(
                 np.concatenate((self.buffer[k][:self.ptr], self.buffer[k][last_seg_idx:]))).to(self.device)
-                for k in self.key_order)
+                for k in cols)
         return tuple(torch.FloatTensor(self.buffer[k][self.ptr-n:self.ptr]).to(self.device)
-            for k in self.key_order)
+            for k in cols)
     
 
-    def sample(self, batch_size):
+    def sample(self, batch_size, aux=False):
+        cols = (self.key_order + self.aux_cols) if aux else self.key_order
         ind = np.random.randint(0, self.size, size=batch_size)
         return tuple(torch.FloatTensor(self.buffer[k][ind]).to(self.device)
-            for k in self.key_order)
+            for k in cols)
 
 
     def save(self, path):
+        buf = { k: self.buffer[k] for k in self.key_order }
         np.savez(path,
                  key_order=self.key_order,
                  max_size=self.max_size,
                  size=self.size,
                  ptr=self.ptr,
-                 **self.buffer)
+                 **buf)
 
     def __getitem__(self, x):
         return self.buffer[x]
@@ -84,6 +93,7 @@ class ReplayBuffer:
             track_truncate=('truncate' in d['key_order']),
         )
         dummy.key_order = list(d['key_order'])
+        dummy.aux_cols = []
         dummy.max_size = int(d['max_size'])
         dummy.size = int(d['size'])
         dummy.ptr = int(d['ptr'])
