@@ -12,7 +12,7 @@ from ppo import PPO
 from render_video import MetaWorldVideo
 from normalizer import RunningNormalizer
 
-OUT_DIR = './rnd_ppo_data1'
+OUT_DIR = './rnd_window_open_ppo_data1'
 #OUT_DIR = './ppo_test7'
 
 
@@ -37,7 +37,7 @@ def run_vanilla_rnd(
     rnd_optimizer = torch.optim.Adam(rnd.predictor.parameters(), lr=1e-4)
     rnd_reward_normalizer = RunningNormalizer(device=device)
     rnd_obs_normalizer = RunningNormalizer(device=device, clamp=(-5,5))
-    out_data = ReplayBuffer(state_dim, action_dim, max_size=max_samples, aux_cols=['state_val', 'logprob'])
+    out_data = ReplayBuffer(state_dim, action_dim, max_size=max_samples, aux_cols=['state_val', 'logprob', 'real_terminals'])
 
     max_reward = 0
     max_reward_iter = (0,0,0)
@@ -95,10 +95,11 @@ def run_vanilla_rnd(
                 rnd_reward_normalizer.update(rnd_reward)
 
                 rnd_rewards.append(rnd_reward)
-                out_data.add(state, action, next_state, reward, terminal, state_val=ppo_state_val, logprob=ppo_logprob)
+                out_data.add(state, action, next_state, reward, info["success"], state_val=ppo_state_val, logprob=ppo_logprob, real_terminals=terminal)
                 if terminal or truncate:
-                    cycle_done = True
-                    break
+                    #cycle_done = True
+                    #break
+                    pass
                 state = next_state
 
                 # TODO: Update reward normalization parameters
@@ -112,9 +113,8 @@ def run_vanilla_rnd(
             rnd_rewards = rnd_reward_normalizer(rnd_rewards, do_center=False, batched=True)
             #rnd_rewards = torch.nn.functional.normalize(rnd_rewards, dim=0)
             #rnd_rewards = (rnd_rewards - rnd_rewards.mean()) / rnd_rewards.std()
-            # TODO: Update observation normalization parameters
 
-            states, actions, next_states, ext_rewards, terminals, state_vals, logprobs = out_data.sample_last_n(ep_step_count, aux=True)
+            states, actions, next_states, ext_rewards, terminals, state_vals, logprobs, real_terminals = out_data.sample_last_n(ep_step_count, aux=True)
             for o in range(num_opt_iters):
                 idx_order = torch.randperm(ep_step_count).to(device)
                 # RND opt step:
@@ -130,7 +130,7 @@ def run_vanilla_rnd(
                                next_states[idx_order],
                                rnd_rewards[idx_order],
                                #ext_rewards[idx_order],
-                               terminals[idx_order].flatten(),
+                               real_terminals[idx_order].flatten(),
                                state_vals[idx_order],
                                logprobs[idx_order]),
                                epochs=num_opt_iters)
@@ -163,8 +163,8 @@ if __name__ == '__main__':
     if not Path(OUT_DIR).exists():
         os.makedirs(OUT_DIR)
 
-    ml1 = metaworld.ML1("pick-place-v2", seed=0)
-    env = ml1.train_classes["pick-place-v2"](render_mode="rgb_array")
+    ml1 = metaworld.ML1("window-open-v2", seed=0)
+    env = ml1.train_classes["window-open-v2"](render_mode="rgb_array")
     env.set_task(ml1.train_tasks[0])
     env.max_path_length = EP_LENGTH * EPS_PER_CYCLE + NUM_RAND_ACTS + 1
     env._partially_observable = False
