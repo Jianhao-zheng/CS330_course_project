@@ -128,7 +128,7 @@ class SAC(nn.Module):
                 p_targ.data.mul_(self.polyak)
                 p_targ.data.add_((1 - self.polyak) * p.data)
         
-        return loss_q.item(), loss_pi.item()
+        return loss_q.item(), loss_pi.item(), pi_info
     
     def select_action(self, o):
         a = self.ac.act(torch.as_tensor(o, dtype=torch.float32), deterministic=True)
