@@ -11,16 +11,24 @@ def main(args):
 
     # form dataset in d3rlpy
     data = np.load(args.data_path)
-    assert np.sum(data["terminal"]) == 0
+    # assert np.sum(data["terminal"]) == 0
 
-    timeouts = np.zeros(data["state"].shape[0]).astype(int)
+    dones = np.zeros((data["state"].shape[0]))
+    timeouts = np.zeros((data["state"].shape[0]))
     for i in range(data["state"].shape[0]):
         if (i + 1) % args.max_length == 0:
-            timeouts[i] = 1
+            dones[i] = data["terminal"][i]
+            if dones[i] == 0:
+                timeouts[i] = 1
 
     dataset = d3rlpy.dataset.MDPDataset(
-        data["state"], data["action"], data["reward"], data["terminal"], timeouts
+        data["state"],
+        data["action"],
+        data["reward"],
+        dones,
+        timeouts,
     )
+
     print(dataset.size())
 
     # scaler that do automatically normalization of the data
@@ -54,7 +62,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--max_length",
         type=int,
-        default=2000,
+        default=500,
         help="Number of steps before resetting the environment. Same value as env.max_path_length when the data is collected.",
     )
     parser.add_argument(
