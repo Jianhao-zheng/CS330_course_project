@@ -2,6 +2,7 @@ import math
 import random
 import re
 import time
+from collections import OrderedDict
 
 import numpy as np
 import torch
@@ -9,6 +10,211 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch import distributions as pyd
 from torch.distributions.utils import _standard_normal
+
+class Actor(nn.Module):
+    def __init__(self, obs_type, obs_dim, action_dim, feature_dim, hidden_dim):
+        super().__init__()
+
+        feature_dim = feature_dim if obs_type == 'pixels' else hidden_dim
+
+        self.trunk = nn.Sequential(nn.Linear(obs_dim, feature_dim),
+                                   nn.LayerNorm(feature_dim), nn.Tanh())
+
+        policy_layers = []
+        policy_layers += [
+            nn.Linear(feature_dim, hidden_dim),
+            nn.ReLU(inplace=True)
+        ]
+        policy_layers += [nn.Linear(hidden_dim, action_dim)]
+
+        self.policy = nn.Sequential(*policy_layers)
+
+        self.apply(weight_init)
+
+    def forward(self, obs, std):
+        h = self.trunk(obs)
+
+        mu = self.policy(h)
+        mu = torch.tanh(mu)
+        std = torch.ones_like(mu) * std
+
+        dist = TruncatedNormal(mu, std)
+        return dist
+
+
+class Critic(nn.Module):
+    def __init__(self, obs_type, obs_dim, action_dim, feature_dim, hidden_dim):
+        super().__init__()
+
+        self.obs_type = obs_type
+
+        if obs_type == 'pixels':
+            # for pixels actions will be added after trunk
+            self.trunk = nn.Sequential(nn.Linear(obs_dim, feature_dim),
+                                       nn.LayerNorm(feature_dim), nn.Tanh())
+            trunk_dim = feature_dim + action_dim
+        else:
+            # for states actions come in the beginning
+            self.trunk = nn.Sequential(
+                nn.Linear(obs_dim + action_dim, hidden_dim),
+                nn.LayerNorm(hidden_dim), nn.Tanh())
+            trunk_dim = hidden_dim
+
+        def make_q():
+            q_layers = []
+            q_layers += [
+                nn.Linear(trunk_dim, hidden_dim),
+                nn.ReLU(inplace=True)
+            ]
+            if obs_type == 'pixels':
+                q_layers += [
+                    nn.Linear(hidden_dim, hidden_dim),
+                    nn.ReLU(inplace=True)
+                ]
+            q_layers += [nn.Linear(hidden_dim, 1)]
+            return nn.Sequential(*q_layers)
+
+        self.Q1 = make_q()
+        self.Q2 = make_q()
+
+        self.apply(weight_init)
+
+    def forward(self, obs, action):
+        inpt = obs if self.obs_type == 'pixels' else torch.cat([obs, action],
+                                                               dim=-1)
+        h = self.trunk(inpt)
+        h = torch.cat([h, action], dim=-1) if self.obs_type == 'pixels' else h
+
+        q1 = self.Q1(h)
+        q2 = self.Q2(h)
+
+        return q1, q2
+
+
+class DDPGAgent:
+    def __init__(self,
+                 obs_type,
+                 obs_shape,
+                 action_shape,
+                 device,
+                 lr,
+                 feature_dim,
+                 hidden_dim,
+                 critic_target_tau,
+                 stddev_schedule,
+                 stddev_clip,
+                 meta_dim=0):
+
+        self.obs_type = obs_type
+        self.obs_shape = obs_shape
+        self.action_dim = action_shape[0]
+        self.hidden_dim = hidden_dim
+        self.lr = lr
+        self.device = device
+        self.critic_target_tau = critic_target_tau
+
+        self.stddev_schedule = stddev_schedule
+        self.stddev_clip = stddev_clip
+        self.feature_dim = feature_dim
+        self.solved_meta = None
+
+        # models
+        self.aug = nn.Identity()
+        self.encoder = nn.Identity()
+        self.obs_dim = obs_shape[0] + meta_dim
+
+        self.actor = Actor(obs_type, self.obs_dim, self.action_dim,
+                           feature_dim, hidden_dim).to(device)
+
+        self.critic = Critic(obs_type, self.obs_dim, self.action_dim,
+                             feature_dim, hidden_dim).to(device)
+        self.critic_target = Critic(obs_type, self.obs_dim, self.action_dim,
+                                    feature_dim, hidden_dim).to(device)
+        self.critic_target.load_state_dict(self.critic.state_dict())
+
+        # optimizers
+
+        if obs_type == 'pixels':
+            self.encoder_opt = torch.optim.Adam(self.encoder.parameters(),
+                                                lr=lr)
+        else:
+            self.encoder_opt = None
+        self.actor_opt = torch.optim.Adam(self.actor.parameters(), lr=lr)
+        self.critic_opt = torch.optim.Adam(self.critic.parameters(), lr=lr)
+
+        self.train()
+        self.critic_target.train()
+
+    def train(self, training=True):
+        self.training = training
+        self.encoder.train(training)
+        self.actor.train(training)
+        self.critic.train(training)
+
+    def get_meta_specs(self):
+        return tuple()
+
+    def init_meta(self):
+        return OrderedDict()
+
+    def update_meta(self, meta, global_step, time_step, finetune=False):
+        return meta
+
+    def aug_and_encode(self, obs):
+        obs = self.aug(obs)
+        return self.encoder(obs)
+    
+    def update_actor(self, obs, step):
+        metrics = dict()
+
+        stddev = schedule(self.stddev_schedule, step)
+        dist = self.actor(obs, stddev)
+        action = dist.sample(clip=self.stddev_clip)
+        log_prob = dist.log_prob(action).sum(-1, keepdim=True)
+        Q1, Q2 = self.critic(obs, action)
+        Q = torch.min(Q1, Q2)
+
+        actor_loss = -Q.mean()
+
+        # optimize actor
+        self.actor_opt.zero_grad(set_to_none=True)
+        actor_loss.backward()
+        self.actor_opt.step()
+
+        metrics['actor_loss'] = actor_loss.item()
+        metrics['actor_logprob'] = log_prob.mean().item()
+        metrics['actor_ent'] = dist.entropy().sum(dim=-1).mean().item()
+
+        return metrics
+    
+    def update_critic(self, obs, action, reward, discount, next_obs, step):
+        metrics = dict()
+
+        with torch.no_grad():
+            stddev = schedule(self.stddev_schedule, step)
+            dist = self.actor(next_obs, stddev)
+            next_action = dist.sample(clip=self.stddev_clip)
+            target_Q1, target_Q2 = self.critic_target(next_obs, next_action)
+            target_V = torch.min(target_Q1, target_Q2)
+            target_Q = reward + (discount * target_V)
+
+        Q1, Q2 = self.critic(obs, action)
+        critic_loss = F.mse_loss(Q1, target_Q) + F.mse_loss(Q2, target_Q)
+
+        metrics['critic_target_q'] = target_Q.mean().item()
+        metrics['critic_q1'] = Q1.mean().item()
+        metrics['critic_q2'] = Q2.mean().item()
+        metrics['critic_loss'] = critic_loss.item()
+
+        # optimize critic
+        if self.encoder_opt is not None:
+            self.encoder_opt.zero_grad(set_to_none=True)
+        self.critic_opt.zero_grad(set_to_none=True)
+        critic_loss.backward()
+        self.critic_opt.step()
+        if self.encoder_opt is not None:
+            self.encoder_opt.step()
+        return metrics
 
 
 class eval_mode:
@@ -94,6 +300,16 @@ class Until:
         until = self._until // self._action_repeat
         return step < until
 
+class Once:
+    def __init__(self, until, action_repeat=1):
+        self._until = until
+        self._action_repeat = action_repeat
+
+    def __call__(self, step):
+        if self._until is None:
+            return True
+        until = self._until // self._action_repeat
+        return step == until
 
 class Every:
     def __init__(self, every, action_repeat=1):
@@ -285,8 +501,12 @@ class PBE(object):
         self.knn_clip = knn_clip
         self.device = device
 
-    def __call__(self, rep):
-        source = target = rep
+    def __call__(self, rep, rep2=None):
+        if rep2 is None:
+            source = target = rep
+        else:
+            source = rep
+            target = rep2
         b1, b2 = source.size(0), target.size(0)
         # (b1, 1, c) - (1, b2, c) -> (b1, 1, c) - (1, b2, c) -> (b1, b2, c) -> (b1, b2)
         sim_matrix = torch.norm(source[:, None, :].view(b1, 1, -1) -
@@ -316,3 +536,43 @@ class PBE(object):
             reward = reward.mean(dim=1, keepdim=True)  # (b1, 1)
         reward = torch.log(reward + 1.0)
         return reward
+
+
+class PBKL(object):
+    def __init__(self, rms, knn_clip, knn_k, knn_avg, knn_rms, device):
+        self.rms = rms
+        self.knn_rms = knn_rms
+        self.knn_k = knn_k
+        self.knn_avg = knn_avg
+        self.knn_clip = knn_clip
+        self.device = device
+    def __call__(self, source, source_demo):
+        """Computes the KL divergence between the source distribution and source_demo distribution"""
+        n = source.size(0) # number of samples from distr p
+        m = source_demo.size(0) # number of samples from distr q
+        d = source.size(1) # dimension of the observation
+        v_k = compute_v_k(source, source_demo, self.knn_k)
+        p_k = compute_p_k(source, self.knn_k)
+        log_ratio = torch.log(v_k + 1) - torch.log(p_k + 1)
+        if self.knn_rms: # normalize to be good scale
+            log_ratio = log_ratio / self.rms(log_ratio)[0]
+        reward = log_ratio # + math.log(m / (n-1))
+        return reward, {'v_k_mean': v_k.mean(), 'v_k_std': v_k.std(), 'p_k_mean': p_k.mean(), 'p_k_std': p_k.std()}
+
+def compute_v_k(source, source_demo, knn_k):
+    n = source.size(0) # number of samples from distr p
+    m = source_demo.size(0) # number of samples from distr q
+    d = source.size(1) # dimension of the observation
+    kl_sim_matrix = torch.norm(source[:, None, :].view(n, 1, -1) - source_demo[None, :, :].view(1, m, -1), dim=-1, p=2)
+    v_k, _ = kl_sim_matrix.topk(knn_k + 1, dim=1, largest=False, sorted=True)
+    v_k = v_k[:, -1] # (n, )
+    return v_k
+
+def compute_p_k(source, knn_k):
+    n = source.size(0) # number of samples from distr p
+    d = source.size(1) # dimension of the observation
+    # compute kth distance
+    sim_matrix = torch.norm(source[:, None, :].view(n, 1, -1) - source[None, :, :].view(1, n, -1), dim=-1, p=2)
+    p_k, _ = sim_matrix.topk(knn_k + 1, dim=1, largest=False, sorted=True)
+    p_k = p_k[:, -1] # (n, )
+    return p_k

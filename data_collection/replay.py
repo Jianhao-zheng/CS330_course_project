@@ -10,6 +10,7 @@ class ReplayBuffer:
                  track_terminal=True,
                  track_truncate=False,
                  track_goal=False,
+                 goal_dim=None,
         ):
         self.max_size = max_size
         self.ptr = 0
@@ -32,7 +33,10 @@ class ReplayBuffer:
             self.buffer['truncate'] = np.zeros((max_size, 1))
         if track_goal:
             self.key_order.append('goal')
-            self.buffer['goal'] = np.zeros((max_size, state_dim))
+            if goal_dim is None:
+                self.buffer['goal'] = np.zeros((max_size, state_dim))
+            else:
+                self.buffer['goal'] = np.zeros((max_size, goal_dim))
 
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
