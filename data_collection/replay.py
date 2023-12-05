@@ -9,6 +9,8 @@ class ReplayBuffer:
                  track_reward=True,
                  track_terminal=True,
                  track_truncate=False,
+                 track_goal=False,
+                 goal_dim=None,
                  aux_cols=[],
         ):
         self.max_size = max_size
@@ -30,7 +32,12 @@ class ReplayBuffer:
         if track_truncate:
             self.key_order.append('truncate')
             self.buffer['truncate'] = np.zeros((max_size, 1))
-
+        if track_goal:
+            self.key_order.append('goal')
+            if goal_dim is None:
+                self.buffer['goal'] = np.zeros((max_size, state_dim))
+            else:
+                self.buffer['goal'] = np.zeros((max_size, goal_dim))
         self.aux_cols = aux_cols
         for a in aux_cols:
             self.buffer[a] = np.zeros((max_size, 1))
@@ -38,7 +45,7 @@ class ReplayBuffer:
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
-    def add(self, state, action, next_state, reward=None, terminal=None, truncate=None, **aux):
+    def add(self, state, action, next_state, reward=None, terminal=None, truncate=None, goal=None, **aux):
         self.buffer['state'][self.ptr] = state
         self.buffer['action'][self.ptr] = action
         self.buffer['next_state'][self.ptr] = next_state
@@ -48,6 +55,8 @@ class ReplayBuffer:
             self.buffer['terminal'][self.ptr] = terminal
         if truncate is not None:
             self.buffer['truncate'][self.ptr] = truncate
+        if goal is not None:
+            self.buffer['goal'][self.ptr] = goal
         for k in aux:
             self.buffer[k][self.ptr] = aux[k]
 
@@ -91,6 +100,7 @@ class ReplayBuffer:
             track_reward=('reward' in d['key_order']),
             track_terminal=('terminal' in d['key_order']),
             track_truncate=('truncate' in d['key_order']),
+            track_goal=('goal' in d['key_order']),
         )
         dummy.key_order = list(d['key_order'])
         dummy.aux_cols = []
@@ -106,4 +116,6 @@ class ReplayBuffer:
             dummy.buffer['terminal'] = d['terminal']
         if 'truncate' in d['key_order']:
             dummy.buffer['truncate'] = d['truncate']
+        if 'goal' in d['key_order']:
+            dummy.buffer['goal'] = d['goal']
         return dummy
