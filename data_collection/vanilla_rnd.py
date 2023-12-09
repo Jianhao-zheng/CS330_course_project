@@ -44,7 +44,7 @@ def run_vanilla_rnd(
     max_reward_iter = (0,0,0)
 
     vid_iters_per_frame = 10
-    vid_cycle_step = 1
+    vid_cycle_step = 5
     vid_cyles_per_vid = 10
 
     vid = MetaWorldVideo()
