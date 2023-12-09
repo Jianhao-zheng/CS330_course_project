@@ -5,9 +5,9 @@ import metaworld
 
 
 def main(args):
-    ml1 = metaworld.ML1("pick-place-v2")
-    eval_env = ml1.train_classes["pick-place-v2"](render_mode="rgb_array")
-    eval_env.set_task(ml1.train_tasks[0])
+    # ml1 = metaworld.ML1("pick-place-v2")
+    # eval_env = ml1.train_classes["pick-place-v2"](render_mode="rgb_array")
+    # eval_env.set_task(ml1.train_tasks[0])
 
     # form dataset in d3rlpy
     data = np.load(args.data_path)
@@ -42,16 +42,20 @@ def main(args):
         reward_scaler=reward_scaler,
     ).create(device="cuda:0")
 
-    td_error_evaluator = d3rlpy.metrics.TDErrorEvaluator(episodes=dataset.episodes)
-    env_evaluator = d3rlpy.metrics.EnvironmentEvaluator(eval_env)
+    # td_error_evaluator = d3rlpy.metrics.TDErrorEvaluator(episodes=dataset.episodes)
+    # env_evaluator = d3rlpy.metrics.EnvironmentEvaluator(eval_env)
 
+    # iql.fit(
+    #     dataset,
+    #     n_steps=500000,
+    #     evaluators={
+    #         "td_error": td_error_evaluator,
+    #         "environment": env_evaluator,
+    #     },
+    # )
     iql.fit(
         dataset,
         n_steps=500000,
-        evaluators={
-            "td_error": td_error_evaluator,
-            "environment": env_evaluator,
-        },
     )
 
     iql.save_model(args.save_model)
