@@ -49,8 +49,8 @@ def run_vanilla_rnd(
     max_reward_iter = (0,0,0)
 
     vid_iters_per_frame = 10
-    vid_cycle_step = 1
-    vid_cyles_per_vid = 3
+    vid_cycle_step = 5
+    vid_cyles_per_vid = 10
 
     vid = MetaWorldVideo() if VISUALIZE else None
     for c in tqdm(range(num_train_cycles), desc='Training cycles'):
