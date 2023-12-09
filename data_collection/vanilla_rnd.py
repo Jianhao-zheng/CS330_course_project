@@ -12,8 +12,9 @@ from ppo import PPO
 from render_video import MetaWorldVideo
 from normalizer import RunningNormalizer
 
-OUT_DIR = './rnd_window_open_ppo_data1'
+OUT_DIR = './rnd_window_close_ppo_data1'
 #OUT_DIR = './ppo_test7'
+TASK_SET = 'window-close-v2'
 
 
 def run_vanilla_rnd(
@@ -30,8 +31,8 @@ def run_vanilla_rnd(
     num_opt_iters=10,
     exploration=0.2,
     exploration_decay=0.995,
-    iterate_tasks=True
-) -> ReplayBuffer:
+    randomize_task=True
+) -> ReplayBuffer:  
     
     max_samples = num_train_cycles * num_epi_per_cycle * num_steps_per_epi
     rnd_optimizer = torch.optim.Adam(rnd.predictor.parameters(), lr=1e-4)
@@ -43,15 +44,15 @@ def run_vanilla_rnd(
     max_reward_iter = (0,0,0)
 
     vid_iters_per_frame = 10
-    vid_cycle_step = 5
+    vid_cycle_step = 1
     vid_cyles_per_vid = 10
 
     vid = MetaWorldVideo()
     for c in range(num_train_cycles):
         #vid = MetaWorldVideo() if c % 1 == 0 else None
         
-        if iterate_tasks:
-            env.set_task(ml1.train_tasks[int(50 * c / num_train_cycles)])
+        if randomize_task:
+            env.set_task(ml1.train_tasks[np.random.choice(len(ml1.train_tasks))])
             env.max_path_length = num_epi_per_cycle * num_steps_per_epi + num_rand_actions + 1
             env._partially_observable = False
         state, _ = env.reset()
@@ -106,11 +107,11 @@ def run_vanilla_rnd(
 
                 if vid and t % vid_iters_per_frame == 0 and c % vid_cycle_step == 0:
                     vid.add_frame(env, f'Cycle {c} Ep {e} Task {int(50 * c / num_train_cycles)}\nExploration: {exploration}' + \
-                                  f'\nRND reward (unused): {rnd_reward:.8f}    Extrinsic reward: {reward:.4f}')
+                                  f'\nRND reward: {rnd_reward:.8f}    Extrinsic reward (unused): {reward:.4f}')
 
             ep_step_count = len(rnd_rewards)
             rnd_rewards = torch.stack(rnd_rewards)
-            rnd_rewards = rnd_reward_normalizer(rnd_rewards, do_center=False, batched=True)
+            #rnd_rewards = rnd_reward_normalizer(rnd_rewards, do_center=False, batched=True)
             #rnd_rewards = torch.nn.functional.normalize(rnd_rewards, dim=0)
             #rnd_rewards = (rnd_rewards - rnd_rewards.mean()) / rnd_rewards.std()
 
@@ -121,7 +122,7 @@ def run_vanilla_rnd(
                 rnd_obs_normalizer.update(states[idx_order], batched=True)
                 pred_out, target_out = rnd(rnd_obs_normalizer(states[idx_order], batched=True))
                 rnd_losses = torch.square(pred_out - target_out).sum(1)
-                rnd_losses = rnd_reward_normalizer(rnd_losses, do_center=False, batched=True)
+                #rnd_losses = rnd_reward_normalizer(rnd_losses, do_center=False, batched=True)
                 rnd_losses.mean().backward()
                 rnd_optimizer.step()
                 rnd_optimizer.zero_grad()
@@ -163,8 +164,8 @@ if __name__ == '__main__':
     if not Path(OUT_DIR).exists():
         os.makedirs(OUT_DIR)
 
-    ml1 = metaworld.ML1("window-open-v2", seed=0)
-    env = ml1.train_classes["window-open-v2"](render_mode="rgb_array")
+    ml1 = metaworld.ML1(TASK_SET, seed=0)
+    env = ml1.train_classes[TASK_SET](render_mode="rgb_array")
     env.set_task(ml1.train_tasks[0])
     env.max_path_length = EP_LENGTH * EPS_PER_CYCLE + NUM_RAND_ACTS + 1
     env._partially_observable = False
@@ -176,8 +177,8 @@ if __name__ == '__main__':
         rl_alg=PPO(
             state_dim=STATE_DIM,
             action_dim=ACTION_DIM,
-            actor_lr=3e-4,
-            critic_lr=1e-3,
+            actor_lr=3e-5,
+            critic_lr=3e-5,
             discount=0.99,
             eps_clip=0.2,       # advantages factor is clipped to (1-eps_clip, 1+eps_clip)
             device=device,
@@ -193,9 +194,9 @@ if __name__ == '__main__':
         num_opt_iters=OPT_ITERS,
         num_rand_actions=NUM_RAND_ACTS,
         num_train_cycles=2000,
-        exploration=1.0,
-        exploration_decay=0.999,
-        iterate_tasks=True
+        exploration=0.0,
+        exploration_decay=0.98,
+        randomize_task=True
     )
 
     #print(out_buffer.size, out_buffer.ptr)
