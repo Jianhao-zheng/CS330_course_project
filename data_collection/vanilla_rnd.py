@@ -4,6 +4,7 @@ import metaworld
 from tqdm import tqdm
 from pathlib import Path
 import os
+import argparse
 
 from replay import ReplayBuffer
 from rnd import RNDModel
@@ -12,9 +13,13 @@ from ppo import PPO
 from render_video import MetaWorldVideo
 from normalizer import RunningNormalizer
 
+# Default values, if not given
 OUT_DIR = './rnd_window_close_ppo_data1'
 #OUT_DIR = './ppo_test7'
 TASK_SET = 'window-close-v2'
+VISUALIZE = False
+
+SAVE_FREQUENCY = 100
 
 
 def run_vanilla_rnd(
@@ -44,11 +49,11 @@ def run_vanilla_rnd(
     max_reward_iter = (0,0,0)
 
     vid_iters_per_frame = 10
-    vid_cycle_step = 5
-    vid_cyles_per_vid = 10
+    vid_cycle_step = 1
+    vid_cyles_per_vid = 3
 
-    vid = MetaWorldVideo()
-    for c in range(num_train_cycles):
+    vid = MetaWorldVideo() if VISUALIZE else None
+    for c in tqdm(range(num_train_cycles), desc='Training cycles'):
         #vid = MetaWorldVideo() if c % 1 == 0 else None
         
         if randomize_task:
@@ -75,7 +80,7 @@ def run_vanilla_rnd(
         #state, _ = env.reset()
 
         # Training episodes
-        for e in tqdm(range(num_epi_per_cycle), desc=f'Cycle {c} episodes'):
+        for e in range(num_epi_per_cycle):
             rnd_rewards = []
 
             for t in range(num_steps_per_epi):
@@ -144,6 +149,9 @@ def run_vanilla_rnd(
             vid.save(f'{OUT_DIR}/{c-(vid_max_cycles-1)}.mp4')
             vid = MetaWorldVideo()
 
+        if c % SAVE_FREQUENCY == 0:
+            out_data.save(f'{OUT_DIR}/vanilla_rnd.npz')
+
     print(f'Max reward: {max_reward}')
     print(f'Max reward iter: {max_reward_iter}')
 
@@ -154,6 +162,17 @@ def run_vanilla_rnd(
 
 
 if __name__ == '__main__':
+
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--task', default=TASK_SET)
+    parser.add_argument('--output-dir', default=OUT_DIR)
+    parser.add_argument('--visualize', action='store_true')
+    args = parser.parse_args()
+    TASK_SET = args.task
+    OUT_DIR = args.output_dir
+    VISUALIZE = args.visualize
+
+
     EP_LENGTH = 500
     EPS_PER_CYCLE = 1
     OPT_ITERS = min(256, 200000 // (EP_LENGTH * EPS_PER_CYCLE))
