@@ -56,9 +56,12 @@ def main(args):
     iql.fit(
         dataset,
         n_steps=500000,
+        logger_adapter=d3rlpy.logging.FileAdapterFactory(
+            root_dir="d3rlpy_logs/{}".format(args.log)
+        ),
     )
 
-    iql.save_model(args.save_model)
+    # iql.save_model(args.save_model)
 
 
 if __name__ == "__main__":
@@ -72,13 +75,13 @@ if __name__ == "__main__":
     parser.add_argument(
         "--data_path",
         type=str,
-        default="data/random_2000.npz",
+        default="data/cic_door_open.npz",
         help="Path to the collected data",
     )
     parser.add_argument(
-        "--save_model",
+        "--log",
         type=str,
-        default="model/iql.pt",
+        default="door_open/IQL_cic_100",
         help="Path to save the trained model",
     )
 
