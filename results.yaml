@@ -1,0 +1,111 @@
+unsup:
+  reach:
+    rand: 98
+    rnd: 56
+    gcrl: 82
+    aps: 100
+    cic: 100
+  window_open:
+    rand: 84
+    rnd: 100
+    gcrl: 52
+    aps: 94
+    cic: 86
+  window_close:
+    rand: 100
+    rnd: 100
+    gcrl: 100
+    aps: 100
+    cic: 100
+  button_press:
+    rand: 24
+    rnd: 48
+    gcrl: 72
+    aps: 82
+    cic: 74
+  pick_place:
+    rand: 0
+    rnd: 2
+    gcrl: 0
+    aps: 0
+    cic: 0
+  door_open:
+    rand: 72
+    rnd: 30
+    gcrl: 0
+    aps: 22
+    cic: 52
+  drawer_open:
+    rand: 100
+    rnd: 62
+    gcrl: 84
+    aps: 94
+    cic: 90
+  drawer_close:
+    rand: 100
+    rnd: 100
+    gcrl: 100
+    aps: 100
+    cic: 100
+  peg_insert_side:
+    rand: 0
+    rnd: 0
+    gcrl: 0
+    aps: 0
+    cic: 2
+  push:
+    rand: 6
+    rnd: 10
+    gcrl: 2
+    aps: 10
+    cic: 6
+5_shot:
+  reach:
+    rand: 100
+    rnd: 70
+    gcrl: 84
+    aps: 100
+    cic: 92
+  window_open:
+    rand: 66
+    rnd: 78
+    gcrl: 22
+    aps: 90
+    cic: 90
+  button_press:
+    rand: 90
+    rnd: 72
+    gcrl: 72
+    aps: 92
+    cic: 70
+  pick_place:
+    rand: 2
+    rnd: 2
+    gcrl: 2
+    aps: 4
+    cic: 2
+10_shot:
+  reach:
+    rand: 100
+    rnd: 90
+    gcrl: 88
+    aps: 100
+    cic: 100
+  window_open:
+    rand: 78
+    rnd: 82
+    gcrl: 56
+    aps: 96
+    cic: 80
+  button_press:
+    rand: 94
+    rnd: 74
+    gcrl: 82
+    aps: 100
+    cic: 78
+  pick_place:
+    rand: 4
+    rnd: 2
+    gcrl: 2
+    aps: 12
+    cic: 12
