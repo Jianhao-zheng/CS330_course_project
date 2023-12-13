@@ -12,6 +12,18 @@ ACTION_DIM = 4
 RANDOM_ACTION_KEY = " "
 END_ITER_KEY = "f"
 CV_WINDOW_NAME = "Robot"
+TASKS = [
+    "reach-v2",
+    "window-open-v2",
+    "window-close-v2",
+    "button-press-v2",
+    "pick-place-v2",
+    "door-open-v2",
+    "drawer-open-v2",
+    "drawer-close-v2",
+    "peg-insert-side-v2",
+    "push-v2",
+]
 visual_id = 0
 
 
@@ -75,6 +87,17 @@ def main(args):
     # load model from the checkpoint
     model = d3rlpy.load_learnable(args.ckpt, device="cuda:0")
 
+    # get task idx (used to concatenate into the input of nerual network)
+    task_idx = 0.0
+    for i, task in enumerate(TASKS):
+        if task == args.task_name:
+            task_idx = i
+            break
+    else:
+        raise ValueError(
+            "None of the task name matches the input: {}!".format(args.task_name)
+        )
+
     # count the number of successful environment
     count_success = 0
     count_grasp_success = 0
@@ -102,7 +125,10 @@ def main(args):
 
             if args.visual:
                 if keystroke == ord(RANDOM_ACTION_KEY):
-                    action = model.predict(obs.reshape((1, -1)))[0]
+                    state = np.zeros((40, 1))
+                    state[:39, :] = obs.reshape((-1, 1))
+                    state[39, 0] = task_idx
+                    action = model.predict(state.reshape((1, -1)))[0]
                 elif keystroke == ord(END_ITER_KEY):
                     break
                 else:
@@ -110,7 +136,10 @@ def main(args):
                         print("Undefined key")
                     continue
             else:
-                action = model.predict(obs.reshape((1, -1)))[0]
+                state = np.zeros((40, 1))
+                state[:39, :] = obs.reshape((-1, 1))
+                state[39, 0] = task_idx
+                action = model.predict(state.reshape((1, -1)))[0]
 
             obs, reward, terminal, truncate, info = env.step(action)
 
