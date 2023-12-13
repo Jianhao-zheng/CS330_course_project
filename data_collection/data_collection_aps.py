@@ -156,7 +156,10 @@ class APSDataCollection(DataCollectionAlgorithm):
                 # TODO: hindsight part?    
                 
                 # Concurrent part
-                c_states, c_actions, c_next_states = self.live_buffer.sample_last_n(self.bs)
+                cycle_size = self.max_steps_per_episode * self.episodes_per_cycle
+                c_states, c_actions, c_next_states = self.live_buffer.sample_last_n(cycle_size)
+                idx = random.sample(range(cycle_size), self.bs)
+                c_states, c_actions, c_next_states = c_states[idx], c_actions[idx], c_next_states[idx]
 
                 metrics = self.aps.update((c_states, c_actions, c_next_states), step=self.step)
                 if self.use_wandb:
@@ -210,7 +213,7 @@ if __name__ == '__main__':
         action_dim=ACTION_DIM,
         hidden_dim=512,
         update_every=16,
-        update_task_every=10,
+        update_task_every=5,
         bs=64,
         lr=3e-5,
         num_cycles=200,

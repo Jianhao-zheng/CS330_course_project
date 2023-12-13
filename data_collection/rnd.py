@@ -14,10 +14,10 @@ class RNDModel(nn.Module):
             nn.Linear(input_size, 512),
             nn.LeakyReLU(),
             nn.Linear(512, 512),
-            # nn.LeakyReLU(),
-            # nn.Linear(512, 512),
-            # nn.LeakyReLU(),
-            # nn.Linear(512, 512),
+            nn.LeakyReLU(),
+            nn.Linear(512, 512),
+            nn.LeakyReLU(),
+            nn.Linear(512, 512),
             nn.LeakyReLU(),
             nn.Linear(512, output_size)
         )
@@ -25,8 +25,8 @@ class RNDModel(nn.Module):
         self.target = nn.Sequential(
             nn.Linear(input_size, 512),
             nn.LeakyReLU(),
-            # nn.Linear(512, 512),
-            # nn.LeakyReLU(),
+            nn.Linear(512, 512),
+            nn.LeakyReLU(),
             nn.Linear(512, output_size)
         )
 

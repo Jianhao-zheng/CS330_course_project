@@ -55,7 +55,7 @@ def main(args):
     # )
     iql.fit(
         dataset,
-        n_steps=500000,
+        n_steps=200000,
         logger_adapter=d3rlpy.logging.FileAdapterFactory(
             root_dir="d3rlpy_logs/{}".format(args.log)
         ),
