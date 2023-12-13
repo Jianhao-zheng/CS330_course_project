@@ -68,3 +68,7 @@ To run the basic script `random_sample.py`, you need to install opencv lib:
   ```bash
   python eval/eval_multi_task_model.py --ckpt ./model/multi-task/cic.d3 --task_name drawer-open-v2
   ```
+
+### Acknowledgement
+*Thanks to Prof. Chelsea Finn and Max Sobol Mark for mentoring the project.
+*The expert data we use are released by [Quentin Gallouédec](https://huggingface.co/qgallouedec). Thanks for the data sharing.
