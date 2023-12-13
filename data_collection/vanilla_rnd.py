@@ -15,7 +15,6 @@ from normalizer import RunningNormalizer
 
 # Default values, if not given
 OUT_DIR = './rnd_window_close_ppo_data1'
-#OUT_DIR = './ppo_test7'
 TASK_SET = 'window-close-v2'
 VISUALIZE = False
 
@@ -34,7 +33,7 @@ def run_vanilla_rnd(
     num_steps_per_epi=500,
     num_rand_actions=100,
     num_opt_iters=10,
-    exploration=0.2,
+    exploration=0.0,
     exploration_decay=0.995,
     randomize_task=True
 ) -> ReplayBuffer:  
@@ -54,7 +53,6 @@ def run_vanilla_rnd(
 
     vid = MetaWorldVideo() if VISUALIZE else None
     for c in tqdm(range(num_train_cycles), desc='Training cycles'):
-        #vid = MetaWorldVideo() if c % 1 == 0 else None
         
         if randomize_task:
             env.set_task(ml1.train_tasks[np.random.choice(len(ml1.train_tasks))])
@@ -75,9 +73,6 @@ def run_vanilla_rnd(
                 max_reward = reward
                 max_reward_iter = f'Initial random action {r}'
             rnd_obs_normalizer.update(obs)
-
-
-        #state, _ = env.reset()
 
         # Training episodes
         for e in range(num_epi_per_cycle):
@@ -103,12 +98,11 @@ def run_vanilla_rnd(
                 rnd_rewards.append(rnd_reward)
                 out_data.add(state, action, next_state, reward, info["success"], state_val=ppo_state_val, logprob=ppo_logprob, real_terminals=terminal)
                 if terminal or truncate:
-                    #cycle_done = True
-                    #break
+                    # We're collecting data, so we don't need to quite on terminals or truncs.
+                    # cycle_done = True
+                    # break
                     pass
                 state = next_state
-
-                # TODO: Update reward normalization parameters
 
                 if vid and t % vid_iters_per_frame == 0 and c % vid_cycle_step == 0:
                     vid.add_frame(env, f'Cycle {c} Ep {e} Task {int(50 * c / num_train_cycles)}\nExploration: {exploration}' + \
@@ -116,9 +110,7 @@ def run_vanilla_rnd(
 
             ep_step_count = len(rnd_rewards)
             rnd_rewards = torch.stack(rnd_rewards)
-            #rnd_rewards = rnd_reward_normalizer(rnd_rewards, do_center=False, batched=True)
-            #rnd_rewards = torch.nn.functional.normalize(rnd_rewards, dim=0)
-            #rnd_rewards = (rnd_rewards - rnd_rewards.mean()) / rnd_rewards.std()
+            # rnd_rewards = rnd_reward_normalizer(rnd_rewards, do_center=False, batched=True)
 
             states, actions, next_states, ext_rewards, terminals, state_vals, logprobs, real_terminals = out_data.sample_last_n(ep_step_count, aux=True)
             for o in range(num_opt_iters):
@@ -127,7 +119,7 @@ def run_vanilla_rnd(
                 rnd_obs_normalizer.update(states[idx_order], batched=True)
                 pred_out, target_out = rnd(rnd_obs_normalizer(states[idx_order], batched=True))
                 rnd_losses = torch.square(pred_out - target_out).sum(1)
-                #rnd_losses = rnd_reward_normalizer(rnd_losses, do_center=False, batched=True)
+                # rnd_losses = rnd_reward_normalizer(rnd_losses, do_center=False, batched=True)
                 rnd_losses.mean().backward()
                 rnd_optimizer.step()
                 rnd_optimizer.zero_grad()
@@ -135,7 +127,6 @@ def run_vanilla_rnd(
                                actions[idx_order],
                                next_states[idx_order],
                                rnd_rewards[idx_order],
-                               #ext_rewards[idx_order],
                                real_terminals[idx_order].flatten(),
                                state_vals[idx_order],
                                logprobs[idx_order]),
@@ -217,8 +208,5 @@ if __name__ == '__main__':
         exploration_decay=0.98,
         randomize_task=True
     )
-
-    #print(out_buffer.size, out_buffer.ptr)
-    #print(out_buffer.sample(5))
 
     out_buffer.save(f'{OUT_DIR}/vanilla_rnd.npz')
